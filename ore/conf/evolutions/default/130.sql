@@ -24,18 +24,18 @@ $$
 BEGIN
     CASE $1
         WHEN 'spongeapi' THEN RETURN substring($2 FROM
-                                               '^\[?(\d+)\.\d+(?:\.\d+)?(?:-SNAPSHOT)?(?:-[a-z0-9]{7,9})?(?:,(?:\d+\.\d+(?:\.\d+)?)?\))?$');
+                                               '^\[?(\d+)\.\d+(?:\.\d+)?(?:-SNAPSHOT)?(?:-[a-z0-9]{7,9})?(?:,(?:\d+\.\d+(?:\.\d+)?)?\))?$');;
         WHEN 'spongeforge' THEN RETURN substring($2 FROM
-                                                 '^\d+\.\d+\.\d+-\d+-(\d+)\.\d+\.\d+(?:(?:-BETA-\d+)|(?:-RC\d+))?$');
+                                                 '^\d+\.\d+\.\d+-\d+-(\d+)\.\d+\.\d+(?:(?:-BETA-\d+)|(?:-RC\d+))?$');;
         WHEN 'spongevanilla' THEN RETURN substring($2 FROM
-                                                   '^\d+\.\d+\.\d+-(\d+)\.\d+\.\d+(?:(?:-BETA-\d+)|(?:-RC\d+))?$');
-        WHEN 'forge' THEN RETURN substring($2 FROM '^\d+\.(\d+)\.\d+(?:\.\d+)?$');
-        WHEN 'lantern' THEN RETURN NULL; --TODO Change this once Lantern changes to SpongeVanilla's format
+                                                   '^\d+\.\d+\.\d+-(\d+)\.\d+\.\d+(?:(?:-BETA-\d+)|(?:-RC\d+))?$');;
+        WHEN 'forge' THEN RETURN substring($2 FROM '^\d+\.(\d+)\.\d+(?:\.\d+)?$');;
+        WHEN 'lantern' THEN RETURN NULL;; --TODO Change this once Lantern changes to SpongeVanilla's format
         ELSE
-        END CASE;
+        END CASE;;
 
-    RETURN NULL;
-END;
+    RETURN NULL;;
+END;;
 $$;
 
 ALTER TABLE project_version_tags
@@ -47,24 +47,24 @@ CREATE FUNCTION stability_from_channel(name TEXT) RETURNS TEXT
 $$
 BEGIN
     CASE lower($1)
-        WHEN 'beta' THEN RETURN 'beta';
-        WHEN 'alpha' THEN RETURN 'alpha';
-        WHEN 'bleeding' THEN RETURN 'bleeding';
-        WHEN 'snapshot' THEN RETURN 'bleeding';
-        WHEN 'snapshots' THEN RETURN 'bleeding';
-        WHEN 'prerelease' THEN RETURN 'beta';
-        WHEN 'pre' THEN RETURN 'beta';
-        WHEN 'outofdate' THEN RETURN 'unsupported';
-        WHEN 'old' THEN RETURN 'unsupported';
-        WHEN 'workinprogress' THEN RETURN 'beta';
-        WHEN 'devbuild' THEN RETURN 'alpha';
-        WHEN 'development' THEN RETURN 'alpha';
-        WHEN 'spongebleeding' THEN RETURN 'bleeding';
+        WHEN 'beta' THEN RETURN 'beta';;
+        WHEN 'alpha' THEN RETURN 'alpha';;
+        WHEN 'bleeding' THEN RETURN 'bleeding';;
+        WHEN 'snapshot' THEN RETURN 'bleeding';;
+        WHEN 'snapshots' THEN RETURN 'bleeding';;
+        WHEN 'prerelease' THEN RETURN 'beta';;
+        WHEN 'pre' THEN RETURN 'beta';;
+        WHEN 'outofdate' THEN RETURN 'unsupported';;
+        WHEN 'old' THEN RETURN 'unsupported';;
+        WHEN 'workinprogress' THEN RETURN 'beta';;
+        WHEN 'devbuild' THEN RETURN 'alpha';;
+        WHEN 'development' THEN RETURN 'alpha';;
+        WHEN 'spongebleeding' THEN RETURN 'bleeding';;
         ELSE
-        END CASE;
+        END CASE;;
 
-    RETURN 'stable';
-END;
+    RETURN 'stable';;
+END;;
 $$;
 
 CREATE FUNCTION color_from_stability(name TEXT) RETURNS INT
@@ -73,20 +73,20 @@ CREATE FUNCTION color_from_stability(name TEXT) RETURNS INT
 $$
 BEGIN
     CASE name
-        WHEN 'stable' THEN RETURN 0;
-        WHEN 'beta' THEN RETURN 0;
-        WHEN 'alpha' THEN RETURN 0;
-        WHEN 'unsupported' THEN RETURN 0;
-        WHEN 'bleeding' THEN RETURN 0;
+        WHEN 'stable' THEN RETURN 0;;
+        WHEN 'beta' THEN RETURN 0;;
+        WHEN 'alpha' THEN RETURN 0;;
+        WHEN 'unsupported' THEN RETURN 0;;
+        WHEN 'bleeding' THEN RETURN 0;;
         ELSE
-        END CASE;
+        END CASE;;
 
-    RETURN 0;
-END;
+    RETURN 0;;
+END;;
 $$;
 
 INSERT INTO project_version_tags (version_id, name, data, color)
-SELECT pv.version_string,
+SELECT pv.id,
        'stability',
        stability_from_channel(pc.name),
        color_from_stability(stability_from_channel(pc.name))
