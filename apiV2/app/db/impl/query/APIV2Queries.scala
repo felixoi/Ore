@@ -253,14 +253,13 @@ object APIV2Queries extends WebDoobieOreProtocol {
             |       pv.file_name,
             |       u.name,
             |       pv.review_state,
-            |       array_append(array_agg(pvt.name ORDER BY (pvt.name)) FILTER ( WHERE pvt.name IS NOT NULL ), 'Channel')  AS tag_names,
-            |       array_append(array_agg(pvt.data ORDER BY (pvt.name)) FILTER ( WHERE pvt.name IS NOT NULL ), pc.name)    AS tag_datas,
-            |       array_append(array_agg(pvt.color ORDER BY (pvt.name)) FILTER ( WHERE pvt.name IS NOT NULL ), pc.color + 9) AS tag_colors
+            |       array_agg(pvt.name ORDER BY (pvt.name)) FILTER ( WHERE pvt.name IS NOT NULL )  AS tag_names,
+            |       array_agg(pvt.data ORDER BY (pvt.name)) FILTER ( WHERE pvt.name IS NOT NULL )   AS tag_datas,
+            |       array_agg(pvt.color ORDER BY (pvt.name)) FILTER ( WHERE pvt.name IS NOT NULL ) AS tag_colors
             |    FROM projects p
             |             JOIN project_versions pv ON p.id = pv.project_id
             |             LEFT JOIN users u ON pv.author_id = u.id
-            |             LEFT JOIN project_version_tags pvt ON pv.id = pvt.version_id
-            |             LEFT JOIN project_channels pc ON pv.channel_id = pc.id """.stripMargin
+            |             LEFT JOIN project_version_tags pvt ON pv.id = pvt.version_id """.stripMargin
 
     val visibilityFrag =
       if (canSeeHidden) None
@@ -279,15 +278,13 @@ object APIV2Queries extends WebDoobieOreProtocol {
         .map { t =>
           Fragments.or(
             Fragments.in(fr"pvt.name || ':' || pvt.data", t),
-            Fragments.in(fr"pvt.name", t),
-            Fragments.in(fr"'Channel:' || pc.name", t),
-            Fragments.in(fr"'Channel'", t)
+            Fragments.in(fr"pvt.name", t)
           )
         },
       visibilityFrag
     )
 
-    base ++ filters ++ fr"GROUP BY p.id, pv.id, u.id, pc.id"
+    base ++ filters ++ fr"GROUP BY p.id, pv.id, u.id"
   }
 
   def versionQuery(
