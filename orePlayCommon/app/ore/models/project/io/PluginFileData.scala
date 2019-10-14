@@ -78,7 +78,7 @@ class PluginFileData(data: Seq[DataValue]) {
     case _                  => false
   }
 
-  def createTags[F[_]](versionId: DbRef[Version])(implicit service: ModelService[F]): F[Seq[Model[VersionTag]]] = {
+  def tags(versionId: DbRef[Version]): Seq[VersionTag] = {
     val buffer = new ArrayBuffer[VersionTag]
 
     if (containsMixins) {
@@ -86,7 +86,7 @@ class PluginFileData(data: Seq[DataValue]) {
       buffer += mixinTag
     }
 
-    service.bulkInsert(buffer.toSeq)
+    buffer.toSeq
   }
 
   /**

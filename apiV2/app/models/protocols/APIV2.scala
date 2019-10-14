@@ -111,13 +111,14 @@ object APIV2 {
       name: String,
       dependencies: List[VersionDependency],
       visibility: Visibility,
-      description: Option[String],
       stats: VersionStatsAll,
       fileInfo: FileInfo,
       author: Option[String],
       reviewState: ReviewState,
       tags: List[VersionTag]
   )
+
+  @ConfiguredJsonCodec case class VersionDescription(description: String)
 
   @ConfiguredJsonCodec case class VersionDependency(plugin_id: String, version: Option[String])
   @ConfiguredJsonCodec case class VersionStatsAll(downloads: Long)

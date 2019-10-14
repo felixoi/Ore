@@ -262,7 +262,6 @@ case class APIV2QueryVersion(
     name: String,
     dependenciesIds: List[String],
     visibility: Visibility,
-    description: Option[String],
     downloads: Long,
     fileSize: Long,
     md5Hash: String,
@@ -283,7 +282,6 @@ case class APIV2QueryVersion(
       )
     },
     visibility,
-    description,
     APIV2.VersionStatsAll(downloads),
     APIV2.FileInfo(name, fileSize, md5Hash),
     authorName,

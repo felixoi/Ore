@@ -223,6 +223,32 @@ GET     /permissions/hasAny                                  @controllers.apiv2.
 GET     /projects                                            @controllers.apiv2.ApiV2Controller.listProjects(q: Option[String], categories: Seq[Category], tags: Seq[String], owner: Option[String], sort: Option[ProjectSortingStrategy], relevance: Option[Boolean], limit: Option[Long], offset: Long ?= 0)
 
 ###
+#  summary: Creates a new project
+#  description: Creates a new project and returns it. Requires the `create_project` permission.
+#  tags:
+#    - Projects
+#  requestBody:
+#    required: true
+#    content:
+#      application/json:
+#        schema:
+#          $ref: '#/components/schemas/controllers.apiv2.ApiV2Controller.ApiV2ProjectTemplate'
+#  responses:
+#    201:
+#      description: Ok
+#      content:
+#        application/json:
+#          schema:
+#            $ref: '#/components/schemas/models.protocols.APIV2.Project'
+#    401:
+#      $ref: '#/components/responses/UnauthorizedError'
+#    403:
+#      $ref: '#/components/responses/ForbiddenError'
+###
++nocsrf
+POST     /projects                                           @controllers.apiv2.ApiV2Controller.createProject()
+
+###
 #  summary: Returns info on a specific project
 #  description: Returns info on a specific project. Requires the `view_public_info` permission.
 #  tags:
@@ -243,6 +269,62 @@ GET     /projects                                            @controllers.apiv2.
 #      $ref: '#/components/responses/ForbiddenError'
 ###
 GET     /projects/:pluginId                                  @controllers.apiv2.ApiV2Controller.showProject(pluginId)
+
+###
+#  summary: Edits an existing project
+#  description: Edits the editable parts of an existing project. Requires the `edit_subject_settings` permission.
+#  tags:
+#    - Projects
+#  requestBody:
+#    required: true
+#    content:
+#      application/json:
+#        schema:
+#          type: object
+#          properties:
+#            name:
+#              type: string
+#            owner_name:
+#              type: string
+#            category:
+#              $ref: '#/components/schemas/Category'
+#            description:
+#              type: string
+#              nullable: true
+#            settings:
+#              type: object
+#              properties:
+#                homepage:
+#                  type: string
+#                  nullable: true
+#                issues:
+#                  type: string
+#                  nullable: true
+#                sources:
+#                  type: string
+#                  nullable: true
+#                support:
+#                  type: string
+#                  nullable: true
+#                license:
+#                  $ref: '#/components/schemas/models.protocols.APIV2.ProjectLicense'
+#                forum_sync:
+#                  type: boolean
+#
+#  responses:
+#    200:
+#      description: Ok
+#      content:
+#        application/json:
+#          schema:
+#            $ref: '#/components/schemas/models.protocols.APIV2.Project'
+#
+#    401:
+#      $ref: '#/components/responses/UnauthorizedError'
+#    403:
+#      $ref: '#/components/responses/ForbiddenError'
+###
+PATCH   /projects/:pluginId                                  @controllers.apiv2.ApiV2Controller.editProject(pluginId)
 
 ###
 #  summary: Returns the members of a project
@@ -359,6 +441,86 @@ GET     /projects/:pluginId/versions                         @controllers.apiv2.
 GET     /projects/:pluginId/versions/:name                   @controllers.apiv2.ApiV2Controller.showVersion(pluginId, name)
 
 ###
+#  summary: Edits an existing version
+#  description: >-
+#    Edits the editable parts of an existing version. Requires the
+#    `edit_version` permission. Tags are not part of this endpoint.
+#  tags:
+#    - Versions
+#  requestBody:
+#    required: true
+#    content:
+#      application/json:
+#        schema:
+#          $ref: '#/components/schemas/controllers.apiv2.ApiV2Controller.EditableVersion'
+#  responses:
+#    200:
+#      description: Ok
+#      content:
+#        application/json:
+#          schema:
+#            $ref: '#/components/schemas/models.protocols.APIV2.Version'
+#
+#    401:
+#      $ref: '#/components/responses/UnauthorizedError'
+#    403:
+#      $ref: '#/components/responses/ForbiddenError'
+###
+PATCH   /projects/:pluginId/versions/:name                   @controllers.apiv2.ApiV2Controller.editVersion(pluginId, name)
+
+###
+#  summary: Sets the tags for this version
+#  description: Sets the tags of an existing version. Requires the `edit_tags` permission.
+#  tags:
+#    - Versions
+#  requestBody:
+#    required: true
+#    content:
+#      application/json:
+#        schema:
+#          $ref: '#/components/schemas/controllers.apiv2.ApiV2Controller.EditableVersion'
+#  responses:
+#    200:
+#      description: Ok
+#      content:
+#        application/json:
+#          schema:
+#            $ref: '#/components/schemas/models.protocols.APIV2.Version'
+#
+#    401:
+#      $ref: '#/components/responses/UnauthorizedError'
+#    403:
+#      $ref: '#/components/responses/ForbiddenError'
+###
+PUT     /projects/:pluginId/versions/:name/tags              @controllers.apiv2.ApiV2Controller.setVersionTags(pluginId, name)
+
+###
+#  summary: Returns the description for a version
+#  description: >-
+#    Returns the description for a version. Requires the `view_public_info`
+#    permission in the project or owning organization.
+#  tags:
+#    - Versions
+#  parameters:
+#    - name: pluginId
+#      description: The plugin id of the project to return the version for
+#    - name: name
+#      description: The name of the version to return the description for
+#  responses:
+#    200:
+#      description: Ok
+#      content:
+#        application/json:
+#          schema:
+#            $ref: '#/components/schemas/models.protocols.APIV2.VersionDescription'
+#    401:
+#      $ref: '#/components/responses/UnauthorizedError'
+#    403:
+#      $ref: '#/components/responses/ForbiddenError'
+###
+GET     /projects/:pluginId/versions/:name/description       @controllers.apiv2.ApiV2Controller.showVersionDescription(pluginId, name)
+
+###
 #  summary: Returns the stats for a version
 #  description: >-
 #    Returns the stats(downloads) for a version per day for a certain
@@ -392,6 +554,44 @@ GET     /projects/:pluginId/versions/:name                   @controllers.apiv2.
 #      $ref: '#/components/responses/ForbiddenError'
 ###
 GET     /projects/:pluginId/versions/:version/stats          @controllers.apiv2.ApiV2Controller.showVersionStats(pluginId, version, fromDate: String, toDate: String)
+
+###
+#  summary: Scan a plugin file.
+#  description: >-
+#    Scan a plugin file for future upload. Use this before uploading a version to
+#    see which tags Ore will assign the file. Requires the `create_version`
+#    permission in the project or owning organization.
+#  tags:
+#    - Versions
+#  parameters:
+#    - name: pluginId
+#      description: The plugin id of the project to scan the file for
+#  requestBody:
+#    required: true
+#    content:
+#      multipart/form-data:
+#        schema:
+#          type: object
+#          properties:
+#            plugin-file:
+#              type: string
+#              format: binary
+#              description: The jar/zip file to upload
+#  responses:
+#    200:
+#      description: Ok
+#      content:
+#        application/json:
+#          schema:
+#            $ref: '#/components/schemas/models.protocols.APIV2.Version'
+#
+#    401:
+#      $ref: '#/components/responses/UnauthorizedError'
+#    403:
+#      $ref: '#/components/responses/ForbiddenError'
+###
++nocsrf
+PUT    /projects/:pluginId/versions                          @controllers.apiv2.ApiV2Controller.scanVersion(pluginId)
 
 ###
 #  summary: Creates a new version

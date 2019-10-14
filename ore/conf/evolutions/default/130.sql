@@ -249,7 +249,7 @@ UNION ALL
 SELECT p.created_at, 'Alpha', 13, p.id, TRUE
 FROM projects p
 UNION ALL
-SELECT p.created_at, 'Unsupported', 1, p.id, FALSE
+SELECT p.created_at, 'Unsupported', 2, p.id, FALSE
 FROM projects p
 UNION ALL
 SELECT p.created_at, 'Bleeding', 14, p.id, TRUE

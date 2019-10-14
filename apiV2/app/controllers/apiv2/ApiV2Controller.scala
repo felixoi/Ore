@@ -24,23 +24,27 @@ import controllers.{OreBaseController, OreControllerComponents}
 import db.impl.query.APIV2Queries
 import models.protocols.APIV2
 import models.querymodels.{APIV2ProjectStatsQuery, APIV2QueryVersion, APIV2QueryVersionTag, APIV2VersionStatsQuery}
-import ore.data.project.Category
+import ore.data.project.{Category, Dependency}
+import ore.db.access.ModelView
 import ore.db.impl.OrePostgresDriver.api._
-import ore.db.impl.schema.{ApiKeyTable, OrganizationTable, ProjectTable, UserTable}
+import ore.db.impl.schema.{ApiKeyTable, OrganizationTable, ProjectTable, UserTable, VersionTable}
 import ore.db.{DbRef, Model}
 import ore.models.api.ApiSession
-import ore.models.project.factory.ProjectFactory
+import ore.models.organization.Organization
+import ore.models.project.factory.{ProjectFactory, ProjectTemplate}
 import ore.models.project.io.PluginUpload
-import ore.models.project.{Page, ProjectSortingStrategy}
+import ore.models.project.{Page, ProjectSortingStrategy, ReviewState, Visibility}
 import ore.models.user.{FakeUser, User}
 import ore.permission.scope.{GlobalScope, OrganizationScope, ProjectScope, Scope}
 import ore.permission.{NamedPermission, Permission}
+import ore.util.OreMDC
 import _root_.util.syntax._
 
 import akka.http.scaladsl.model.headers.{Authorization, HttpCredentials}
 import cats.data.{NonEmptyList, Validated}
 import cats.kernel.Semigroup
 import cats.syntax.all._
+import com.typesafe.scalalogging
 import enumeratum._
 import io.circe.generic.extras._
 import io.circe.syntax._
@@ -62,6 +66,9 @@ class ApiV2Controller @Inject()(
 
   implicit def zioMode[R]: scalacache.Mode[ZIO[R, Throwable, *]] =
     scalacache.CatsEffect.modes.async[ZIO[R, Throwable, *]]
+
+  private val Logger    = scalalogging.Logger("ApiV2Controller")
+  private val MDCLogger = scalalogging.Logger.takingImplicit[OreMDC](Logger.underlying)
 
   private val resultCache = scalacache.caffeine.CaffeineCache[IO[Result, Result]]
 
@@ -472,6 +479,83 @@ class ApiV2Controller @Inject()(
       }
     }
 
+  private def orgasUserCanUploadTo(user: Model[User]): UIO[Set[String]] = {
+    import cats.instances.vector._
+    for {
+      all <- user.organizations.allFromParent
+      canCreate <- all.toVector.parTraverse(
+        org => user.permissionsIn(org).map(_.has(Permission.CreateProject)).tupleLeft(org.name)
+      )
+    } yield {
+      // Filter by can Create Project
+      val others = canCreate.collect {
+        case (name, true) => name
+      }
+
+      others.toSet + user.name // Add self
+    }
+  }
+
+  //TODO: Check if we need another scope her to accommodate organizations
+  def createProject(): Action[ApiV2ProjectTemplate] =
+    ApiAction(Permission.CreateProject, APIScope.GlobalScope).asyncF(parseCirce.decodeJson[ApiV2ProjectTemplate]) {
+      implicit request =>
+        val user                = request.user.get
+        val settings            = request.body
+        implicit val lang: Lang = user.langOrDefault
+
+        for {
+          _ <- ZIO
+            .fromOption(factory.getUploadError(user))
+            .flip
+            .mapError(e => BadRequest(UserError(messagesApi(e))))
+          _ <- orgasUserCanUploadTo(user).filterOrFail(_.contains(settings.ownerName))(
+            BadRequest(ApiError("Can't upload to that organization"))
+          )
+          owner <- {
+            if (settings.ownerName == user.name) ZIO.succeed(user)
+            else
+              ModelView
+                .now(User)
+                .find(_.name === settings.ownerName)
+                .toZIOWithError(BadRequest(ApiError("User not found, or can't upload to that user")))
+          }
+          project <- factory
+            .createProject(owner, settings.asFactoryTemplate)
+            .mapError(e => BadRequest(UserError(messagesApi(e))))
+          _ <- projects.refreshHomePage(MDCLogger)
+        } yield {
+
+          Created(
+            APIV2.Project(
+              project.createdAt,
+              project.pluginId,
+              project.name,
+              APIV2.ProjectNamespace(project.ownerName, project.slug),
+              Nil,
+              APIV2.ProjectStatsAll(0, 0, 0, 0, 0, 0),
+              project.category,
+              project.description,
+              project.createdAt,
+              project.visibility,
+              APIV2.UserActions(starred = false, watching = false),
+              APIV2.ProjectSettings(
+                project.settings.homepage,
+                project.settings.issues,
+                project.settings.source,
+                project.settings.support,
+                APIV2.ProjectLicense(
+                  project.settings.licenseName,
+                  project.settings.licenseUrl
+                ),
+                project.settings.forumSync
+              ),
+              _root_.controllers.project.routes.Projects.showIcon(project.ownerName, project.slug).absoluteURL()
+            )
+          )
+        }
+    }
+
   def showProject(pluginId: String): Action[AnyContent] =
     ApiAction(Permission.ViewPublicInfo, APIScope.ProjectScope(pluginId)).asyncF { implicit request =>
       cachingF("showProject")(pluginId) {
@@ -494,6 +578,41 @@ class ApiV2Controller @Inject()(
         service.runDbCon(dbCon).get.flatMap(identity).bimap(_ => NotFound, Ok(_))
       }
     }
+
+  def withUndefined[A: Decoder](cursor: ACursor): Decoder.AccumulatingResult[Option[A]] = {
+    import cats.instances.option._
+    import cats.instances.either._
+    val res = if (cursor.succeeded) Some(cursor.as[A]) else None
+
+    res.sequence.toValidatedNel
+  }
+
+  def editProject(pluginId: String): Action[Json] =
+    ApiAction(Permission.EditProjectSettings, APIScope.ProjectScope(pluginId))
+      .asyncF(parseCirce.json) { implicit request =>
+        val root     = request.body.hcursor
+        val settings = root.downField("settings")
+
+        val res = (
+          withUndefined[String](root.downField("name")),
+          withUndefined[String](root.downField("owner_name")),
+          withUndefined[Category](root.downField("category"))(
+            Decoder[String].emap(Category.fromApiName(_).toRight("Not a valid category name"))
+          ),
+          withUndefined[Option[String]](root.downField("description")),
+          withUndefined[Option[String]](settings.downField("homepage")),
+          withUndefined[Option[String]](settings.downField("issues")),
+          withUndefined[Option[String]](settings.downField("sources")),
+          withUndefined[Option[String]](settings.downField("support")),
+          withUndefined[APIV2.ProjectLicense](settings.downField("license")),
+          withUndefined[Boolean](settings.downField("forum_sync"))
+        ).mapN(EditableProject.apply)
+
+        res match {
+          case Validated.Valid(a)   => ???
+          case Validated.Invalid(e) => ZIO.fail(BadRequest(ApiErrors(e.map(_.show))))
+        }
+      }
 
   def showMembers(pluginId: String, limit: Option[Long], offset: Long): Action[AnyContent] =
     ApiAction(Permission.ViewPublicInfo, APIScope.ProjectScope(pluginId)).asyncF { implicit request =>
@@ -594,6 +713,42 @@ class ApiV2Controller @Inject()(
       }
     }
 
+  def editVersion(pluginId: String, name: String): Action[Json] =
+    ApiAction(Permission.EditVersion, APIScope.ProjectScope(pluginId)).asyncF(parseCirce.json) { implicit request =>
+      val root = request.body.hcursor
+      val res = (
+        withUndefined[Option[String]](root.downField("description"))
+      ).map(EditableVersion.apply)
+
+      res match {
+        case Validated.Valid(a)   => ???
+        case Validated.Invalid(e) => ZIO.fail(BadRequest(ApiErrors(e.map(_.show))))
+      }
+    }
+
+  def setVersionTags(pluginId: String, name: String): Action[Map[String, StringOrArrayString]] =
+    ApiAction(Permission.EditVersion, APIScope.ProjectScope(pluginId))
+      .asyncF(parseCirce.decodeJson[Map[String, StringOrArrayString]]) { implicit request =>
+        ???
+      }
+
+  def showVersionDescription(pluginId: String, name: String): Action[AnyContent] =
+    ApiAction(Permission.ViewPublicInfo, APIScope.ProjectScope(pluginId)).asyncF { implicit request =>
+      cachingF("showVersionDescription")(pluginId, name) {
+        service
+          .runDBIO(
+            TableQuery[ProjectTable]
+              .join(TableQuery[VersionTable])
+              .on(_.id === _.projectId)
+              .filter(t => t._1.pluginId === pluginId && t._2.versionString === name)
+              .map(_._2.description)
+              .result
+              .headOption
+          )
+          .map(_.fold(NotFound: Result)(a => Ok(APIV2.VersionDescription(a))))
+      }
+    }
+
   def showVersionStats(
       pluginId: String,
       version: String,
@@ -630,6 +785,61 @@ class ApiV2Controller @Inject()(
     import zio.blocking._
     effectBlocking(java.nio.file.Files.readAllLines(file).asScala.mkString("\n"))
   }
+
+  def scanVersion(pluginId: String): Action[MultipartFormData[Files.TemporaryFile]] =
+    ApiAction(Permission.CreateVersion, APIScope.ProjectScope(pluginId))(parse.multipartFormData).asyncF {
+      implicit request =>
+        val fileF = ZIO.fromEither(
+          request.body.file("plugin-file").toRight(BadRequest(ApiError("No plugin file specified")))
+        )
+
+        def uploadErrors(user: Model[User]) = {
+          implicit val lang: Lang = user.langOrDefault
+          ZIO.fromEither(
+            factory
+              .getUploadError(user)
+              .map(e => BadRequest(UserError(messagesApi(e))))
+              .toLeft(())
+          )
+        }
+
+        for {
+          user    <- ZIO.fromOption(request.user).asError(BadRequest(ApiError("No user found for session")))
+          _       <- uploadErrors(user)
+          project <- projects.withPluginId(pluginId).get.asError(NotFound)
+          file    <- fileF
+          t <- factory
+            .collectErrorsForVersionUpload(PluginUpload(file.ref, file.filename), user, project)
+            .leftMap { s =>
+              implicit val lang: Lang = user.langOrDefault
+              BadRequest(UserError(messagesApi(s)))
+            }
+        } yield {
+          val (versionString, pluginFile) = t
+          val tags                        = factory.tagsForVersion(pluginFile)(0L)
+
+          val apiTags = tags.map(tag => APIV2QueryVersionTag(tag.name, tag.data, tag.color)).toList
+
+          val apiVersion = APIV2QueryVersion(
+            OffsetDateTime.now(),
+            versionString,
+            pluginFile.data.dependencies.map {
+              case Dependency(pluginId, Some(version)) => s"$pluginId:$version"
+              case Dependency(pluginId, None)          => pluginId
+            }.toList,
+            Visibility.Public,
+            0,
+            pluginFile.path.toFile.length,
+            pluginFile.md5,
+            pluginFile.path.getFileName.toString,
+            Some(user.name),
+            ReviewState.Unreviewed,
+            apiTags
+          )
+
+          Ok(ScannedVersion(apiVersion.asProtocol, ???))
+        }
+    }
 
   def deployVersion(pluginId: String): Action[MultipartFormData[Files.TemporaryFile]] =
     ApiAction(Permission.CreateVersion, APIScope.ProjectScope(pluginId))(parse.multipartFormData).asyncF {
@@ -680,7 +890,7 @@ class ApiV2Controller @Inject()(
           data    <- dataF
           file    <- fileF
           pendingVersion <- factory
-            .processSubsequentPluginUpload(PluginUpload(file.ref, file.filename), user, project)
+            .collectErrorsForVersionUpload(PluginUpload(file.ref, file.filename), user, project)
             .leftMap { s =>
               implicit val lang: Lang = user.langOrDefault
               BadRequest(UserError(messagesApi(s)))
@@ -701,7 +911,6 @@ class ApiV2Controller @Inject()(
             version.versionString,
             version.dependencyIds,
             version.visibility,
-            version.description,
             0,
             version.fileSize,
             version.hash,
@@ -909,5 +1118,38 @@ object ApiV2Controller {
   @ConfiguredJsonCodec case class PermissionCheck(
       `type`: APIScopeType,
       result: Boolean
+  )
+
+  case class EditableProject(
+      name: Option[String],
+      ownerName: Option[String],
+      category: Option[Category],
+      description: Option[Option[String]],
+      homepage: Option[Option[String]],
+      issues: Option[Option[String]],
+      sources: Option[Option[String]],
+      support: Option[Option[String]],
+      license: Option[APIV2.ProjectLicense],
+      forumSync: Option[Boolean]
+  )
+
+  case class EditableVersion(
+      description: Option[Option[String]]
+  )
+
+  @ConfiguredJsonCodec case class ApiV2ProjectTemplate(
+      name: String,
+      pluginId: String,
+      category: Category,
+      description: Option[String],
+      ownerName: String
+  ) {
+
+    def asFactoryTemplate: ProjectTemplate = ProjectTemplate(name, pluginId, category, description)
+  }
+
+  @ConfiguredJsonCodec case class ScannedVersion(
+      version: APIV2.Version,
+      warnings: Option[Seq[String]]
   )
 }

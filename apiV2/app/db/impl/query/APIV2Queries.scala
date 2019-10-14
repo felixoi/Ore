@@ -246,7 +246,6 @@ object APIV2Queries extends WebDoobieOreProtocol {
             |       pv.version_string,
             |       pv.dependencies,
             |       pv.visibility,
-            |       pv.description,
             |       (SELECT sum(pvd.downloads) FROM project_versions_downloads pvd WHERE p.id = pvd.project_id AND pv.id = pvd.version_id),
             |       pv.file_size,
             |       pv.hash,
@@ -254,7 +253,7 @@ object APIV2Queries extends WebDoobieOreProtocol {
             |       u.name,
             |       pv.review_state,
             |       array_agg(pvt.name ORDER BY (pvt.name)) FILTER ( WHERE pvt.name IS NOT NULL )  AS tag_names,
-            |       array_agg(pvt.data ORDER BY (pvt.name)) FILTER ( WHERE pvt.name IS NOT NULL )   AS tag_datas,
+            |       array_agg(pvt.data ORDER BY (pvt.name)) FILTER ( WHERE pvt.name IS NOT NULL )  AS tag_datas,
             |       array_agg(pvt.color ORDER BY (pvt.name)) FILTER ( WHERE pvt.name IS NOT NULL ) AS tag_colors
             |    FROM projects p
             |             JOIN project_versions pv ON p.id = pv.project_id

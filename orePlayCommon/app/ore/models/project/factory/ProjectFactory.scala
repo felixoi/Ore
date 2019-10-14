@@ -13,6 +13,7 @@ import ore.data.user.notification.NotificationType
 import ore.data.{Color, Platform}
 import ore.db.access.ModelView
 import ore.db.impl.OrePostgresDriver.api._
+import ore.db.impl.schema.VersionTable
 import ore.db.{DbRef, Model, ModelService}
 import ore.member.MembershipDossier
 import ore.models.project._
@@ -26,6 +27,7 @@ import ore.{OreConfig, OreEnv}
 import util.FileIO
 import util.syntax._
 
+import cats.MonadError
 import cats.data.NonEmptyList
 import cats.syntax.all._
 import com.google.common.base.Preconditions._
@@ -66,7 +68,7 @@ trait ProjectFactory {
     * @param owner      Upload owner
     * @return Loaded PluginFile
     */
-  def processPluginUpload(uploadData: PluginUpload, owner: Model[User])(
+  private def processPluginUpload(uploadData: PluginUpload, owner: Model[User])(
       implicit messages: Messages
   ): ZIO[Blocking, String, PluginFileWithData] = {
     val pluginFileName = uploadData.pluginFileName
@@ -97,27 +99,51 @@ trait ProjectFactory {
     }
   }
 
-  def processSubsequentPluginUpload(uploadData: PluginUpload, uploader: Model[User], project: Model[Project])(
+  /**
+    * Returns true if a project ID is defined on this Model, there is no
+    * matching hash in the Project, and there is no duplicate version with
+    * the same name in the Project.
+    *
+    * @return True if exists
+    */
+  def versionExists(projectId: DbRef[Project], hash: String, versionString: String): UIO[Boolean] = {
+    val hashExistsBaseQuery = for {
+      v <- TableQuery[VersionTable]
+      if v.projectId === projectId
+      if v.hash === hash
+    } yield v.id
+
+    val hashExistsQuery = hashExistsBaseQuery.exists
+
+    for {
+      project <- ModelView
+        .now(Project)
+        .get(projectId)
+        .getOrElseF(ZIO.dieMessage(s"No project found for id $projectId"))
+      versionExistsQuery = project
+        .versions(ModelView.later(Version))
+        .exists(_.versionString.toLowerCase === versionString.toLowerCase)
+      res <- service.runDBIO(Query((hashExistsQuery, versionExistsQuery)).map(t => t._1 && t._2).result.head)
+    } yield res
+  }
+
+  def collectErrorsForVersionUpload(uploadData: PluginUpload, uploader: Model[User], project: Model[Project])(
       implicit messages: Messages
-  ): ZIO[Blocking, String, PendingVersion] =
+  ): ZIO[Blocking, String, (String, PluginFileWithData)] =
     for {
       plugin <- processPluginUpload(uploadData, uploader)
         .ensure("error.version.invalidPluginId")(_.data.id.contains(project.pluginId))
         .ensure("error.version.illegalVersion")(!_.data.version.contains("recommended"))
-      version <- IO.fromEither(
-        this.startVersion(
-          plugin,
-          project.pluginId,
-          project.id,
-          project.settings.forumSync
-        )
-      )
-      modelExists <- version.exists[Task].orDie
-      res <- {
-        if (modelExists && this.config.ore.projects.fileValidate) IO.fail("error.version.duplicate")
-        else version.cache[Task].as(version).orDie
+      metaData = plugin.data
+      _ <- ZIO.unit.filterOrFail(_ => metaData.id.contains(project.pluginId))("error.plugin.invalidPluginId")
+      _ <- ZIO.unit.filterOrFail(_ => metaData.version.isDefined)("error.plugin.noVersion")
+      versionString = StringUtils.slugify(metaData.version.get)
+      modelExists <- versionExists(project.id, plugin.md5, versionString)
+      _ <- {
+        if (modelExists && this.config.ore.projects.fileValidate) ZIO.fail("error.version.duplicate")
+        else ZIO.unit
       }
-    } yield res
+    } yield versionString -> plugin
 
   /**
     * Returns the error ID to display to the User, if any, if they cannot
@@ -180,56 +206,6 @@ trait ProjectFactory {
     } yield newProject
   }
 
-  /**
-    * Starts the construction process of a [[Version]].
-    *
-    * @param plugin  Plugin file
-    * @return PendingVersion instance
-    */
-  def startVersion(
-      plugin: PluginFileWithData,
-      pluginId: String,
-      projectId: DbRef[Project],
-      forumSync: Boolean
-  ): Either[String, PendingVersion] = {
-    val metaData = plugin.data
-    if (!metaData.id.contains(pluginId))
-      Left("error.plugin.invalidPluginId")
-    else if (metaData.version.isEmpty)
-      Left("error.plugin.noVersion")
-    else {
-      // Create new pending version
-      val path = plugin.path
-
-      Right(
-        PendingVersion(
-          versionString = StringUtils.slugify(metaData.version.get),
-          dependencies = metaData.dependencies.toList,
-          description = metaData.description,
-          projectId = projectId,
-          fileSize = path.toFile.length,
-          hash = plugin.md5,
-          fileName = path.getFileName.toString,
-          authorId = plugin.user.id,
-          plugin = plugin,
-          createForumPost = forumSync,
-          cacheApi = cacheApi
-        )
-      )
-    }
-  }
-
-  /**
-    * Returns the pending version for the specified owner, name, channel, and
-    * version string.
-    *
-    * @param project Project for version
-    * @param version Name of version
-    * @return PendingVersion, if present, None otherwise
-    */
-  def getPendingVersion(project: Model[Project], version: String): Option[PendingVersion] =
-    this.cacheApi.get[PendingVersion](s"${project.id}/$version")
-
   private def notifyWatchers(
       version: Model[Version],
       project: Model[Project]
@@ -263,17 +239,12 @@ trait ProjectFactory {
   ): ZIO[Blocking, Nothing, (Model[Project], Model[Version], Seq[Model[VersionTag]])] = {
 
     for {
-      // Create channel if not exists
-      exists <- pending.exists[Task].orDie
-      _ <- if (exists && this.config.ore.projects.fileValidate)
-        UIO.die(new IllegalArgumentException("Version already exists."))
-      else UIO.unit
       // Create version
       version <- service.insert(pending.asVersion(project.id))
-      tags    <- addTags(pending, version)
+      tags    <- service.bulkInsert(tagsForVersion(pending.plugin)(version.id))
       // Notify watchers
       _ <- notifyWatchers(version, project)
-      _ <- uploadPlugin(project, pending.plugin, version).orDieWith(s => new Exception(s))
+      _ <- uploadPluginFile(project, pending.plugin, version).orDieWith(s => new Exception(s))
       firstTimeUploadProject <- {
         if (project.visibility == Visibility.New) {
           val setVisibility = (project: Model[Project]) => {
@@ -296,21 +267,16 @@ trait ProjectFactory {
     } yield (firstTimeUploadProject, withTopicId, tags)
   }
 
-  private def addTags(pendingVersion: PendingVersion, newVersion: Model[Version]): UIO[Seq[Model[VersionTag]]] =
-    (
-      pendingVersion.plugin.data.createTags(newVersion.id),
-      addDependencyTags(newVersion)
-    ).parMapN(_ ++ _)
+  def tagsForVersion(plugin: PluginFileWithData): DbRef[Version] => Seq[VersionTag] = id => {
+    Platform.ghostTags(
+      id,
+      // filter valid dependency versions
+      plugin.data.dependencies.filter(_.version.forall(dependencyVersionRegex.pattern.matcher(_).matches()))
+    ) ++
+      plugin.data.tags(id)
+  }
 
-  private def addDependencyTags(version: Model[Version]): UIO[Seq[Model[VersionTag]]] =
-    Platform
-      .createPlatformTags(
-        version.id,
-        // filter valid dependency versions
-        version.dependencies.filter(_.version.forall(dependencyVersionRegex.pattern.matcher(_).matches()))
-      )
-
-  private def uploadPlugin(
+  private def uploadPluginFile(
       project: Project,
       plugin: PluginFileWithData,
       version: Version

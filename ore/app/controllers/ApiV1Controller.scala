@@ -235,7 +235,7 @@ final class ApiV1Controller @Inject()(
                 EitherT.fromEither[ZIO[Blocking, Nothing, *]](pluginUpload).flatMap { data =>
                   EitherT(
                     this.factory
-                      .processSubsequentPluginUpload(data, owner, project)
+                      .collectErrorsForVersionUpload(data, owner, project)
                       .either
                   ).leftMap(err => BadRequest(error("upload", err)))
                 }
