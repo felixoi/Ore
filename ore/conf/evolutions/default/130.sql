@@ -73,15 +73,16 @@ CREATE FUNCTION color_from_stability(name TEXT) RETURNS INT
 $$
 BEGIN
     CASE name
-        WHEN 'stable' THEN RETURN 0;;
-        WHEN 'beta' THEN RETURN 0;;
-        WHEN 'alpha' THEN RETURN 0;;
-        WHEN 'unsupported' THEN RETURN 0;;
-        WHEN 'bleeding' THEN RETURN 0;;
+        --TODO: Create better colors here
+        WHEN 'stable' THEN RETURN 17;;
+        WHEN 'beta' THEN RETURN 17;;
+        WHEN 'alpha' THEN RETURN 17;;
+        WHEN 'unsupported' THEN RETURN 17;;
+        WHEN 'bleeding' THEN RETURN 17;;
         ELSE
         END CASE;;
 
-    RETURN 0;;
+    RETURN 17;;
 END;;
 $$;
 
