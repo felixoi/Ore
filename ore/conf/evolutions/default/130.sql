@@ -75,10 +75,10 @@ BEGIN
     CASE name
         --TODO: Create better colors here
         WHEN 'stable' THEN RETURN 17;;
-        WHEN 'beta' THEN RETURN 17;;
-        WHEN 'alpha' THEN RETURN 17;;
-        WHEN 'unsupported' THEN RETURN 17;;
-        WHEN 'bleeding' THEN RETURN 17;;
+        WHEN 'beta' THEN RETURN 20;;
+        WHEN 'alpha' THEN RETURN 22;;
+        WHEN 'unsupported' THEN RETURN 9;;
+        WHEN 'bleeding' THEN RETURN 23;;
         ELSE
         END CASE;;
 
@@ -249,14 +249,14 @@ UNION ALL
 SELECT p.created_at, 'Alpha', 13, p.id, TRUE
 FROM projects p
 UNION ALL
-SELECT p.created_at, 'Unsupported', 0, p.id, FALSE
+SELECT p.created_at, 'Unsupported', 1, p.id, FALSE
 FROM projects p
 UNION ALL
 SELECT p.created_at, 'Bleeding', 14, p.id, TRUE
 FROM projects p;
 
 INSERT INTO project_channels (created_at, name, color, project_id)
-SELECT p.created_at, pvt.data, pvt.color, p.id
+SELECT DISTINCT ON (p.id, pvt.data) p.created_at, pvt.data, pvt.color - 9, p.id
 FROM project_version_tags pvt
          JOIN project_versions pv ON pvt.version_id = pv.id
          JOIN projects p ON pv.project_id = p.id
