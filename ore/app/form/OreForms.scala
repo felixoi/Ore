@@ -16,13 +16,11 @@ import form.project._
 import ore.OreConfig
 import ore.data.project.Category
 import ore.db.access.ModelView
-import ore.db.impl.OrePostgresDriver.api._
 import ore.db.{DbRef, Model, ModelService}
 import ore.models.api.ProjectApiKey
 import ore.models.organization.Organization
 import ore.models.project.factory.ProjectFactory
-import ore.models.project.{Channel, Page}
-import ore.models.user.role.ProjectUserRole
+import ore.models.project.Page
 import util.syntax._
 
 import cats.data.OptionT
@@ -191,23 +189,6 @@ class OreForms @Inject()(
   )
 
   /**
-    * Submits a new Channel for a Project.
-    */
-  lazy val ChannelEdit = Form(
-    mapping(
-      "channel-input" -> text.verifying(
-        "Invalid channel name.",
-        config.isValidChannelName(_)
-      ),
-      "channel-color-input" -> text.verifying(
-        "Invalid channel color.",
-        c => Channel.Colors.exists(_.hex.equalsIgnoreCase(c))
-      ),
-      "non-reviewed" -> default(boolean, false)
-    )(ChannelData.apply)(ChannelData.unapply)
-  )
-
-  /**
     * Submits changes on a documentation page.
     */
   lazy val PageEdit = Form(
@@ -238,22 +219,6 @@ class OreForms @Inject()(
   lazy val UserTagline = Form(single("tagline" -> text))
 
   /**
-    * Submits a new Version.
-    */
-  lazy val VersionCreate = Form(
-    mapping(
-      "unstable"      -> boolean,
-      "recommended"   -> boolean,
-      "channel-input" -> text.verifying("Invalid channel name.", config.isValidChannelName(_)),
-      "channel-color-input" -> text
-        .verifying("Invalid channel color.", c => Channel.Colors.exists(_.hex.equalsIgnoreCase(c))),
-      "non-reviewed" -> default(boolean, false),
-      "content"      -> optional(text),
-      "forum-post"   -> boolean
-    )(VersionData.apply)(VersionData.unapply)
-  )
-
-  /**
     * Submits a change to a Version's description.
     */
   lazy val VersionDescription = Form(single("content" -> text))
@@ -275,26 +240,11 @@ class OreForms @Inject()(
 
   def ProjectApiKeyRevoke = Form(single("id" -> projectApiKey))
 
-  def channel(implicit request: ProjectRequest[_]): FieldMapping[OptionT[UIO, Model[Channel]]] =
-    of[OptionT[UIO, Model[Channel]]](new Formatter[OptionT[UIO, Model[Channel]]] {
-      def bind(key: String, data: Map[String, String]): Either[Seq[FormError], OptionT[UIO, Model[Channel]]] =
-        data
-          .get(key)
-          .map(channelOptF(_))
-          .toRight(Seq(FormError(key, "api.deploy.channelNotFound", Nil)))
-
-      def unbind(key: String, value: OptionT[UIO, Model[Channel]]): Map[String, String] =
-        runtime.unsafeRun(value.value).map(key -> _.name.toLowerCase).toMap
-    })
-
-  def channelOptF(c: String)(implicit request: ProjectRequest[_]): OptionT[UIO, Model[Channel]] =
-    request.data.project.channels(ModelView.now(Channel)).find(_.name.toLowerCase === c.toLowerCase)
-
   def VersionDeploy(implicit request: ProjectRequest[_]) =
     Form(
       mapping(
         "apiKey"      -> nonEmptyText,
-        "channel"     -> channel,
+        "channel"     -> optional(nonEmptyText),
         "recommended" -> default(boolean, true),
         "forumPost"   -> default(boolean, request.data.project.settings.forumSync),
         "changelog"   -> optional(text(minLength = Page.minLength, maxLength = Page.maxLength))

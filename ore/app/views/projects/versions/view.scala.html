@@ -22,10 +22,6 @@
     <div class="row">
         <div class="col-md-12 version-header">
                 <!-- Title -->
-            <div class="clearfix">
-                <h1 class="pull-left">@v.v.versionString</h1>
-                <span class="channel channel-head" style="background-color: @v.c.color.hex;">@v.c.name</span>
-            </div>
 
                 <!-- User info -->
             <p class="user date pull-left">
@@ -40,11 +36,6 @@
             <div class="pull-right version-actions">
                 <div class="version-icons">
                     <div>
-                    @if(v.isRecommended) {
-                            <i data-toggle="tooltip" data-placement="left"
-                            title="@messages("version.recommended")"
-                            class="recommended far fa-lg fa-gem pull-right"></i>
-                    }
 
                     @if(v.v.reviewState.isChecked) {
                             @if(request.headerData.globalPerm(Permission.Reviewer)) {
@@ -69,17 +60,6 @@
                     <div><span class="date">@v.v.humanFileSize</span></div>
 
                     <div>
-
-                        @if(!v.isRecommended && sp.perms(Permission.EditVersion) && v.v.visibility != Visibility.SoftDelete) {
-                            @form(action = versionRoutes.setRecommended(
-                                v.p.project.ownerName, v.p.project.slug, v.v.versionString), Symbol("class") -> "form-inline") {
-                                @CSRF.formField
-                                <button type="submit" class="btn btn-info">
-                                    <i class="fas fa-gem"></i> Set recommended
-                                </button>
-                            }
-                        }
-
                         @if(request.headerData.globalPerm(Permission.Reviewer)) {
                             @if(v.v.reviewState.isChecked) {
                                 <a href="@reviewRoutes.showReviews(v.p.project.ownerName, v.p.project.slug, v.v.versionString)" class="btn btn-info">@messages("review.log")</a>
@@ -138,7 +118,7 @@
                                         @if(v.v.visibility == Visibility.SoftDelete) {
                                             <li><a href="#" data-toggle="modal" data-target="#modal-restore">Undo delete</a></li>
                                         }
-                                        @if(request.headerData.globalPerm(Permission.HardDeleteVersion) && !v.isRecommended) {
+                                        @if(request.headerData.globalPerm(Permission.HardDeleteVersion)) {
                                             <li><a href="#" data-toggle="modal" data-target="#modal-harddelete" style="color: darkred">Hard delete</a></li>
                                         }
                                     }

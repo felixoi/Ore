@@ -20,7 +20,6 @@ import ore.models.user.{User, UserOwned}
 import ore.permission.role.RoleCategory
 import util.syntax._
 
-import cats.data.OptionT
 import cats.syntax.all._
 import cats.{MonadError, Parallel}
 import slick.lifted.TableQuery
@@ -37,7 +36,6 @@ case class ProjectData(
     noteCount: Int,                                    // getNotes.size
     lastVisibilityChange: Option[ProjectVisibilityChange],
     lastVisibilityChangeUser: String, // users.get(project.lastVisibilityChange.get.createdBy.get).map(_.username).getOrElse("Unknown")
-    recommendedVersion: Option[Model[Version]],
     iconUrl: String,
     starCount: Long,
     watcherCount: Long
@@ -96,7 +94,6 @@ object ProjectData {
       members(project),
       service.runDBIO(flagsWithNames.result),
       service.runDBIO(lastVisibilityChangeUserWithUser.result.headOption),
-      project.recommendedVersion(ModelView.now(Version)).getOrElse(OptionT.none[F, Model[Version]]).value,
       project.obj.iconUrl,
       service.runDbCon(SharedQueries.watcherStartProject(project.id).unique)
     ).parMapN {
@@ -106,7 +103,6 @@ object ProjectData {
           members,
           flagData,
           lastVisibilityChangeInfo,
-          recommendedVersion,
           iconUrl,
           (starCount, watcherCount)
           ) =>
@@ -121,7 +117,6 @@ object ProjectData {
           noteCount,
           lastVisibilityChangeInfo.map(_._1),
           lastVisibilityChangeInfo.flatMap(_._2).getOrElse("Unknown"),
-          recommendedVersion,
           iconUrl,
           starCount,
           watcherCount

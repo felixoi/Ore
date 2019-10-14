@@ -670,6 +670,9 @@ class ApiV2Controller @Inject()(
           )
         }
 
+        //TODO: Handle tags
+        ???
+
         for {
           user    <- ZIO.fromOption(request.user).asError(BadRequest(ApiError("No user found for session")))
           _       <- uploadErrors(user)
@@ -685,21 +688,14 @@ class ApiV2Controller @Inject()(
             .map { v =>
               v.copy(
                 createForumPost = data.createForumPost.getOrElse(project.settings.forumSync),
-                channelName = data.tags.getOrElse(Map.empty).view.mapValues(_.first).getOrElse("Channel", v.channelName),
                 description = data.description
               )
             }
           t <- pendingVersion.complete(project, factory)
         } yield {
-          val (_, version, channel, tags) = t
+          val (_, version, tags) = t
 
-          val normalApiTags = tags.map(tag => APIV2QueryVersionTag(tag.name, tag.data, tag.color)).toList
-          val channelApiTag = APIV2QueryVersionTag(
-            "Channel",
-            Some(channel.name),
-            channel.color.toTagColor
-          )
-          val apiTags = channelApiTag :: normalApiTags
+          val apiTags = tags.map(tag => APIV2QueryVersionTag(tag.name, tag.data, tag.color)).toList
           val apiVersion = APIV2QueryVersion(
             version.createdAt,
             version.versionString,

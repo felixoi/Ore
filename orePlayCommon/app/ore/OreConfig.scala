@@ -9,7 +9,6 @@ import play.api.{ConfigLoader, Configuration}
 
 import ore.data.Color
 import ore.db.DbRef
-import ore.models.project.Channel
 import ore.models.user.User
 import ore.util.StringUtils._
 
@@ -225,11 +224,6 @@ final class OreConfig @Inject()(config: Configuration) {
   security.sso.load()
   mail.load()
   performance.load()
-
-  /**
-    * The default color used for Channels.
-    */
-  val defaultChannelColor: Color = Channel.Colors(ore.channels.colorDefault)
 
   /**
     * The default name used for Channels.

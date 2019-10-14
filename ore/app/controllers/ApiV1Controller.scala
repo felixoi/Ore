@@ -9,16 +9,17 @@ import play.api.mvc._
 
 import controllers.sugar.Requests.AuthedProjectRequest
 import form.OreForms
+import form.project.VersionDeployForm
 import ore.auth.CryptoUtils
 import ore.db.access.ModelView
 import ore.db.impl.OrePostgresDriver.api._
 import ore.db.impl.schema.ProjectApiKeyTable
-import ore.db.{DbRef, Model}
+import ore.db.DbRef
 import ore.models.api.ProjectApiKey
 import ore.models.organization.Organization
 import ore.models.project.factory.ProjectFactory
 import ore.models.project.io.PluginUpload
-import ore.models.project.{Channel, Page, Project, Version}
+import ore.models.project.{Page, Project, Version, VersionTag}
 import ore.models.user.{LoggedActionProject, LoggedActionType, User}
 import ore.permission.Permission
 import ore.permission.role.Role
@@ -178,13 +179,26 @@ final class ApiV1Controller @Inject()(
         .bindEitherT[ZIO[Blocking, Nothing, *]](
           hasErrors => BadRequest(Json.obj("errors" -> hasErrors.errorsAsJson))
         )
-        .flatMap { formData =>
-          OptionT(formData.channel.value: ZIO[Blocking, Nothing, Option[Model[Channel]]])
-            .toRight(BadRequest(Json.obj("errors" -> "Invalid channel")))
-            .map(formData -> _)
+        .map { formData =>
+          val stabilityTagData = formData.channel
+            .map(_.toLowerCase)
+            .collect {
+              case "release"    => "stable"
+              case "beta"       => "beta"
+              case "prerelease" => "beta"
+              case "alpha"      => "alpha"
+              case "unstable"   => "alpha"
+              case "bleeding"   => "bleeding"
+              case "snapshot"   => "bleeding"
+            }
+            .getOrElse("stable")
+
+          val tagToInsert = VersionTag(_, "stability", Some(stabilityTagData), ???, None)
+
+          (formData, tagToInsert)
         }
         .flatMap {
-          case (formData, formChannel) =>
+          case (formData, tagToInsert) =>
             val apiKeyTable = TableQuery[ProjectApiKeyTable]
             def queryApiKey(key: String, pId: DbRef[Project]) = {
               val query = for {
@@ -229,24 +243,15 @@ final class ApiV1Controller @Inject()(
               .map { pendingVersion =>
                 pendingVersion.copy(
                   createForumPost = formData.createForumPost,
-                  channelName = formChannel.name,
                   description = formData.changelog
                 )
               }
               .semiflatMap(_.complete(project, factory))
               .semiflatMap {
-                case (newProject, newVersion, channel, tags) =>
-                  val update =
-                    if (formData.recommended)
-                      service.update(project)(
-                        _.copy(
-                          recommendedVersionId = Some(newVersion.id)
-                        )
-                      )
-                    else
-                      ZIO.unit
+                case (newProject, newVersion, tags) =>
+                  val update = service.insert(tagToInsert(newVersion.id))
 
-                  update.as(Created(api.writeVersion(newVersion, newProject, channel, None, tags)))
+                  update.as(Created(api.writeVersion(newVersion, newProject, ???, None, tags)))
               }
         }
         .merge

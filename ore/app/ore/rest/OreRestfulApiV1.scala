@@ -68,7 +68,8 @@ trait OreRestfulApiV1 extends OreWrites {
         id <- preSearch
         t  <- unsortedProjects
         if t._1.id.value == id
-      } yield t
+        (p, v, vt) = t
+      } yield (p, v, FakeChannel.fromVersionTag(vt))
       json <- writeProjects(sortedProjects)
     } yield {
       toJson(json.map(_._2))
@@ -97,14 +98,14 @@ trait OreRestfulApiV1 extends OreWrites {
   }
 
   private def writeProjects(
-      projects: Seq[(Model[Project], Model[Version], Model[Channel])]
+      projects: Seq[(Model[Project], Model[Version], FakeChannel)]
   ): UIO[Seq[(Model[Project], JsObject)]] = {
     val projectIds = projects.map(_._1.id.value)
     val versionIds = projects.map(_._2.id.value)
 
     for {
       chans <- service.runDBIO(queryProjectChannels(projectIds).result).map { chans =>
-        chans.groupBy(_.projectId)
+        chans.groupMap(_._1)(t => FakeChannel.fromVersionTag(t._2))
       }
       vTags <- service.runDBIO(queryVersionTags(versionIds).result).map { p =>
         p.groupBy(_._1).view.mapValues(_.map(_._2))
@@ -124,7 +125,7 @@ trait OreRestfulApiV1 extends OreWrites {
               "description" -> p.description,
               "href"        -> s"/${p.ownerName}/${p.slug}",
               "members"     -> writeMembers(members.getOrElse(p.id.value, Seq.empty)),
-              "channels"    -> toJson(chans.getOrElse(p.id.value, Seq.empty).map(_.obj)),
+              "channels"    -> toJson(chans.getOrElse(p.id.value, Seq.empty)),
               "recommended" -> toJson(writeVersion(v, p, c, None, vTags.getOrElse(v.id.value, Seq.empty))),
               "category"    -> obj("title" -> p.category.title, "icon" -> p.category.icon),
               "views"       -> 0,
@@ -139,7 +140,7 @@ trait OreRestfulApiV1 extends OreWrites {
   def writeVersion(
       v: Model[Version],
       p: Project,
-      c: Channel,
+      c: FakeChannel,
       author: Option[String],
       tags: Seq[Model[VersionTag]]
   ): JsObject = {
@@ -173,7 +174,12 @@ trait OreRestfulApiV1 extends OreWrites {
   }
 
   private def queryProjectChannels(projectIds: Seq[DbRef[Project]]) =
-    TableQuery[ChannelTable].filter(_.projectId.inSetBind(projectIds))
+    for {
+      t <- TableQuery[VersionTagTable]
+      v <- TableQuery[VersionTable] if t.versionId === v.id
+
+      if t.name === "stability" && v.projectId.inSetBind(projectIds)
+    } yield (v.projectId, t)
 
   private def queryVersionTags(versions: Seq[DbRef[Version]]) =
     for {
@@ -182,16 +188,16 @@ trait OreRestfulApiV1 extends OreWrites {
     } yield (v.id, t)
 
   private def queryProjectRV = {
-    //Gets around unused warning
-    def use[A](@unused a: A): Unit = ()
-
     for {
-      p <- TableQuery[ProjectTable]
-      v <- TableQuery[VersionTable] if p.recommendedVersionId === v.id
-      c <- TableQuery[ChannelTable] if v.channelId === c.id
-      _ = use(c)
+      hp <- TableQuery[ApiV1HomeProjectsTable]
+      p  <- TableQuery[ProjectTable] if hp.id === p.id
+      v  <- TableQuery[VersionTable]
+      if p.id === v.projectId && v.versionString === ((hp.promotedVersions ~> 0) +>> "version_string")
+      t <- TableQuery[VersionTagTable] if v.id === t.versionId
+
+      if t.name === "stability"
       if Visibility.isPublicFilter[ProjectTable](p)
-    } yield (p, v, c)
+    } yield (p, v, t)
   }
 
   /**
@@ -206,7 +212,7 @@ trait OreRestfulApiV1 extends OreWrites {
     }
     for {
       project <- service.runDBIO(query.result.headOption)
-      json    <- writeProjects(project.toSeq)
+      json    <- writeProjects(project.map(t => (t._1, t._2, FakeChannel.fromVersionTag(t._3))).toSeq)
     } yield {
       json.headOption.map(_._2)
     }
@@ -250,8 +256,8 @@ trait OreRestfulApiV1 extends OreWrites {
       vTags <- service.runDBIO(queryVersionTags(data.map(_._3)).result).map(_.groupBy(_._1).view.mapValues(_.map(_._2)))
     } yield {
       val list = data.map {
-        case (p, v, vId, c, uName) =>
-          writeVersion(v, p, c, uName, vTags.getOrElse(vId, Seq.empty))
+        case (p, v, vId, t, uName) =>
+          writeVersion(v, p, FakeChannel.fromVersionTag(t), uName, vTags.getOrElse(vId, Seq.empty))
       }
       toJson(list)
     }
@@ -277,8 +283,8 @@ trait OreRestfulApiV1 extends OreWrites {
       tags <- service.runDBIO(queryVersionTags(data.map(_._3).toSeq).result).map(_.map(_._2)) // Get Tags
     } yield {
       data.map {
-        case (p, v, _, c, uName) =>
-          writeVersion(v, p, c, uName, tags)
+        case (p, v, _, t, uName) =>
+          writeVersion(v, p, FakeChannel.fromVersionTag(t), uName, tags)
       }
     }
   }
@@ -287,11 +293,13 @@ trait OreRestfulApiV1 extends OreWrites {
     for {
       p      <- TableQuery[ProjectTable]
       (v, u) <- TableQuery[VersionTable].joinLeft(TableQuery[UserTable]).on(_.authorId === _.id)
-      c      <- TableQuery[ChannelTable]
-      if v.channelId === c.id && p.id === v.projectId && (if (onlyPublic)
+      t      <- TableQuery[VersionTagTable]
+      if t.name === "stability"
+
+      if v.id === t.versionId && p.id === v.projectId && (if (onlyPublic)
                                                             v.visibility === (Visibility.Public: Visibility)
                                                           else true)
-    } yield (p, v, v.id, c, u.map(_.name))
+    } yield (p, v, v.id, t, u.map(_.name))
 
   /**
     * Returns a list of pages for the specified project.
@@ -361,7 +369,7 @@ trait OreRestfulApiV1 extends OreWrites {
     for {
       allProjects     <- service.runDBIO(query.result)
       stars           <- service.runDBIO(queryStars(userList).result).map(_.groupBy(_._1).view.mapValues(_.map(_._2)))
-      jsonProjects    <- writeProjects(allProjects)
+      jsonProjects    <- writeProjects(allProjects.map(t => (t._1, t._2, FakeChannel.fromVersionTag(t._3))))
       userGlobalRoles <- ZIO.foreachParN(config.performance.nioBlockingFibers)(userList)(_.globalRoles.allFromParent)
     } yield {
       val projectsByUser = jsonProjects.groupBy(_._1.ownerId).view.mapValues(_.map(_._2))

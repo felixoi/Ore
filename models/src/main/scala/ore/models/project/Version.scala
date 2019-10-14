@@ -30,13 +30,11 @@ import slick.lifted.TableQuery
   *                         version separated by a ':'
   * @param description     User description of version
   * @param projectId        ID of project this version belongs to
-  * @param channelId        ID of channel this version belongs to
   */
 case class Version(
     projectId: DbRef[Project],
     versionString: String,
     dependencyIds: List[String],
-    channelId: DbRef[Channel],
     fileSize: Long,
     hash: String,
     authorId: Option[DbRef[User]],
@@ -60,17 +58,6 @@ case class Version(
     * @return Name of channel
     */
   def name: String = this.versionString
-
-  /**
-    * Returns the channel this version belongs to.
-    *
-    * @return Channel
-    */
-  def channel[F[_]: ModelService](implicit F: MonadError[F, Throwable]): F[Model[Channel]] =
-    ModelView
-      .now(Channel)
-      .get(this.channelId)
-      .getOrElseF(F.raiseError(new NoSuchElementException("None of Option")))
 
   /**
     * Returns the base URL for this Version.

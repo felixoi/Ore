@@ -104,17 +104,12 @@ trait ProjectFactory {
       plugin <- processPluginUpload(uploadData, uploader)
         .ensure("error.version.invalidPluginId")(_.data.id.contains(project.pluginId))
         .ensure("error.version.illegalVersion")(!_.data.version.contains("recommended"))
-      headChannel <- project
-        .channels(ModelView.now(Channel))
-        .one
-        .getOrElseF(UIO.die(new IllegalStateException("No channel found for project")))
       version <- IO.fromEither(
         this.startVersion(
           plugin,
           project.pluginId,
           project.id,
-          project.settings.forumSync,
-          headChannel.name
+          project.settings.forumSync
         )
       )
       modelExists <- version.exists[Task].orDie
@@ -160,8 +155,6 @@ trait ProjectFactory {
       visibility = Visibility.New
     )
 
-    val channel: DbRef[Project] => Channel = Channel(_, config.defaultChannelName, config.defaultChannelColor)
-
     def cond[E](bool: Boolean, e: E) = if (bool) IO.succeed(()) else IO.fail(e)
 
     for {
@@ -176,7 +169,6 @@ trait ProjectFactory {
       _          <- cond(available, "slug not available")
       _          <- cond(config.isValidProjectName(name), "invalid name")
       newProject <- service.insert(project)
-      _          <- service.insert(channel(newProject.id.value))
       _ <- {
         MembershipDossier
           .projectHasMemberships[UIO]
@@ -198,8 +190,7 @@ trait ProjectFactory {
       plugin: PluginFileWithData,
       pluginId: String,
       projectId: DbRef[Project],
-      forumSync: Boolean,
-      channelName: String
+      forumSync: Boolean
   ): Either[String, PendingVersion] = {
     val metaData = plugin.data
     if (!metaData.id.contains(pluginId))
@@ -220,8 +211,6 @@ trait ProjectFactory {
           hash = plugin.md5,
           fileName = path.getFileName.toString,
           authorId = plugin.user.id,
-          channelName = channelName,
-          channelColor = this.config.defaultChannelColor,
           plugin = plugin,
           createForumPost = forumSync,
           cacheApi = cacheApi
@@ -240,25 +229,6 @@ trait ProjectFactory {
     */
   def getPendingVersion(project: Model[Project], version: String): Option[PendingVersion] =
     this.cacheApi.get[PendingVersion](s"${project.id}/$version")
-
-  /**
-    * Creates a new release channel for the specified [[Project]].
-    *
-    * @param project Project to create channel for
-    * @param name    Channel name
-    * @param color   Channel color
-    * @return New channel
-    */
-  def createChannel(project: Model[Project], name: String, color: Color): UIO[Model[Channel]] = {
-    checkArgument(this.config.isValidChannelName(name), "invalid name", "")
-    for {
-      limitReached <- service.runDBIO(
-        (project.channels(ModelView.later(Channel)).size < config.ore.projects.maxChannels).result
-      )
-      _ = checkState(limitReached, "channel limit reached", "")
-      channel <- service.insert(Channel(project.id, name, color))
-    } yield channel
-  }
 
   private def notifyWatchers(
       version: Model[Version],
@@ -290,21 +260,16 @@ trait ProjectFactory {
   def createVersion(
       project: Model[Project],
       pending: PendingVersion
-  ): ZIO[Blocking, Nothing, (Model[Project], Model[Version], Model[Channel], Seq[Model[VersionTag]])] = {
+  ): ZIO[Blocking, Nothing, (Model[Project], Model[Version], Seq[Model[VersionTag]])] = {
 
     for {
       // Create channel if not exists
-      t <- (getOrCreateChannel(pending, project), pending.exists[Task].orDie).parTupled: ZIO[
-        Blocking,
-        Nothing,
-        (Model[Channel], Boolean)
-      ]
-      (channel, exists) = t
+      exists <- pending.exists[Task].orDie
       _ <- if (exists && this.config.ore.projects.fileValidate)
         UIO.die(new IllegalArgumentException("Version already exists."))
       else UIO.unit
       // Create version
-      version <- service.insert(pending.asVersion(project.id, channel.id))
+      version <- service.insert(pending.asVersion(project.id))
       tags    <- addTags(pending, version)
       // Notify watchers
       _ <- notifyWatchers(version, project)
@@ -328,7 +293,7 @@ trait ProjectFactory {
       withTopicId <- if (firstTimeUploadProject.topicId.isDefined && pending.createForumPost)
         this.forums.createVersionPost(firstTimeUploadProject, version)
       else UIO.succeed(version)
-    } yield (firstTimeUploadProject, withTopicId, channel, tags)
+    } yield (firstTimeUploadProject, withTopicId, tags)
   }
 
   private def addTags(pendingVersion: PendingVersion, newVersion: Model[Version]): UIO[Seq[Model[VersionTag]]] =
@@ -344,12 +309,6 @@ trait ProjectFactory {
         // filter valid dependency versions
         version.dependencies.filter(_.version.forall(dependencyVersionRegex.pattern.matcher(_).matches()))
       )
-
-  private def getOrCreateChannel(pending: PendingVersion, project: Model[Project]) =
-    project
-      .channels(ModelView.now(Channel))
-      .find(equalsIgnoreCase(_.name, pending.channelName))
-      .getOrElseF(createChannel(project, pending.channelName, pending.channelColor))
 
   private def uploadPlugin(
       project: Project,

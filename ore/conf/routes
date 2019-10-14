@@ -139,14 +139,6 @@ POST    /:author/:slug/pages/*page/delete                           @controllers
 GET     /:author/:slug/pages/*page                                  @controllers.project.Pages.show(author, slug, page)
 
 
-# ---------- Channels ----------
-
-GET     /:author/:slug/channels                                     @controllers.project.Channels.showList(author, slug)
-POST    /:author/:slug/channels                                     @controllers.project.Channels.create(author, slug)
-POST    /:author/:slug/channels/:channel                            @controllers.project.Channels.save(author, slug, channel)
-POST    /:author/:slug/channels/:channel/delete                     @controllers.project.Channels.delete(author, slug, channel)
-
-
 # ---------- Versions ----------
 
 GET     /:author/:slug/versions                                     @controllers.project.Versions.showList(author, slug)
@@ -168,13 +160,9 @@ GET     /:author/:slug/versions/recommended/jar                     @controllers
 GET     /:author/:slug/versions/:version/jar                        @controllers.project.Versions.downloadJar(author, slug, version, token: Option[String])
 
 GET     /:author/:slug/versions/new                                 @controllers.project.Versions.showCreator(author, slug)
-POST    /:author/:slug/versions/new/upload                          @controllers.project.Versions.upload(author, slug)
-GET     /:author/:slug/versions/new/:version                        @controllers.project.Versions.showCreatorWithMeta(author, slug, version)
 
-POST    /:author/:slug/versions/:version                            @controllers.project.Versions.publish(author, slug, version)
 GET     /:author/:slug/versions/:version                            @controllers.project.Versions.show(author, slug, version)
 POST    /:author/:slug/versions/:version/save                       @controllers.project.Versions.saveDescription(author, slug, version)
-POST    /:author/:slug/versions/:version/recommended                @controllers.project.Versions.setRecommended(author, slug, version)
 
 
 # ---------- Reviews ----------

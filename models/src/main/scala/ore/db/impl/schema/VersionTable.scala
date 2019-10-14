@@ -5,7 +5,7 @@ import java.time.OffsetDateTime
 import ore.db.DbRef
 import ore.db.impl.OrePostgresDriver.api._
 import ore.db.impl.table.common.{DescriptionColumn, VisibilityColumn}
-import ore.models.project.{Channel, Project, ReviewState, Version}
+import ore.models.project.{Project, ReviewState, Version}
 import ore.models.user.User
 
 class VersionTable(tag: Tag)
@@ -16,7 +16,6 @@ class VersionTable(tag: Tag)
   def versionString   = column[String]("version_string")
   def dependencies    = column[List[String]]("dependencies")
   def projectId       = column[DbRef[Project]]("project_id")
-  def channelId       = column[DbRef[Channel]]("channel_id")
   def fileSize        = column[Long]("file_size")
   def hash            = column[String]("hash")
   def authorId        = column[DbRef[User]]("author_id")
@@ -36,7 +35,6 @@ class VersionTable(tag: Tag)
         projectId,
         versionString,
         dependencies,
-        channelId,
         fileSize,
         hash,
         authorId.?,

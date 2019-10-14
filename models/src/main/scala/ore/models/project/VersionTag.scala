@@ -16,7 +16,8 @@ case class VersionTag(
     versionId: DbRef[Version],
     name: String,
     data: Option[String],
-    color: TagColor
+    color: TagColor,
+    platformVersion: Option[String]
 ) extends Named
 object VersionTag extends ModelCompanionPartial[VersionTag, VersionTagTable](TableQuery[VersionTagTable]) {
 

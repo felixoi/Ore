@@ -82,11 +82,6 @@ trait ProjectBase[+F[_]] {
     */
   def rename(project: Model[Project], name: String): F[Boolean]
 
-  /**
-    * Irreversibly deletes this channel and all version associated with it.
-    */
-  def deleteChannel(project: Model[Project], channel: Model[Channel]): F[Unit]
-
   def prepareDeleteVersion(version: Model[Version]): F[Model[Project]]
 
   /**
@@ -115,8 +110,7 @@ object ProjectBase {
       forums: OreDiscourseApi[F],
       fileManager: ProjectFiles[F],
       fileIO: FileIO[F],
-      F: cats.effect.Effect[F],
-      par: Parallel[F]
+      F: cats.effect.Effect[F]
   ) extends ProjectBase[F] {
 
     def missingFile: F[Seq[Model[Version]]] = {
@@ -203,48 +197,12 @@ object ProjectBase {
       } yield res
     }
 
-    def deleteChannel(project: Model[Project], channel: Model[Channel]): F[Unit] = {
-      for {
-        channels  <- service.runDBIO(project.channels(ModelView.raw(Channel)).result)
-        noVersion <- channel.versions(ModelView.now(Version)).isEmpty
-        nonEmptyChannels <- channels.toVector
-          .parTraverse(_.versions(ModelView.now(Version)).nonEmpty)
-          .map(_.count(identity))
-        _                = checkArgument(channels.size > 1, "only one channel", "")
-        _                = checkArgument(noVersion || nonEmptyChannels > 1, "last non-empty channel", "")
-        reviewedChannels = channels.filter(!_.isNonReviewed)
-        _ = checkArgument(
-          channel.isNonReviewed || reviewedChannels.size > 1 || !reviewedChannels.contains(channel),
-          "last reviewed channel",
-          ""
-        )
-        versions <- service.runDBIO(channel.versions(ModelView.raw(Version)).result)
-        _ <- versions.toVector.parTraverse { version =>
-          val otherChannels = channels.filter(_ != channel)
-          val newChannel =
-            if (channel.isNonReviewed) otherChannels.find(_.isNonReviewed).getOrElse(otherChannels.head)
-            else otherChannels.head
-          service.update(version)(_.copy(channelId = newChannel.id))
-        }
-        _ <- service.delete(channel)
-      } yield ()
-    }
-
     def prepareDeleteVersion(version: Model[Version]): F[Model[Project]] = {
       for {
         proj <- version.project
         size <- proj.versions(ModelView.now(Version)).count(_.visibility === (Visibility.Public: Visibility))
         _ = checkArgument(size > 1, "only one public version", "")
-        rv       <- proj.recommendedVersion(ModelView.now(Version)).sequence.subflatMap(identity).value
-        projects <- service.runDBIO(proj.versions(ModelView.raw(Version)).sortBy(_.createdAt.desc).result) // TODO optimize: only query one version
-        res <- {
-          if (rv.contains(version))
-            service.update(proj)(
-              _.copy(recommendedVersionId = Some(projects.filter(v => v != version && !v.obj.isDeleted).head.id))
-            )
-          else F.pure(proj)
-        }
-      } yield res
+      } yield proj
     }
 
     /**
@@ -252,15 +210,11 @@ object ProjectBase {
       */
     def deleteVersion(version: Model[Version])(implicit mdc: OreMDC): F[Model[Project]] = {
       for {
-        proj       <- prepareDeleteVersion(version)
-        channel    <- version.channel
-        noVersions <- channel.versions(ModelView.now(Version)).isEmpty
+        proj <- prepareDeleteVersion(version)
         _ <- {
           val versionDir = this.fileManager.getVersionDir(proj.ownerName, proj.name, version.name)
           fileIO.executeBlocking(FileUtils.deleteDirectory(versionDir)) *> service.delete(version)
         }
-        // Delete channel if now empty
-        _ <- if (noVersions) this.deleteChannel(proj, channel) else F.unit
       } yield proj
     }
 

@@ -25,8 +25,6 @@ import zio.{Task, ZIO}
 /**
   * Represents a pending version to be created later.
   *
-  * @param channelName    Name of channel this version will be in
-  * @param channelColor   Color of channel for this version
   * @param plugin         Uploaded plugin
   */
 case class PendingVersion(
@@ -38,8 +36,6 @@ case class PendingVersion(
     hash: String,
     fileName: String,
     authorId: DbRef[User],
-    channelName: String,
-    channelColor: Color,
     plugin: PluginFileWithData,
     createForumPost: Boolean,
     cacheApi: SyncCacheApi
@@ -48,7 +44,7 @@ case class PendingVersion(
   def complete(
       project: Model[Project],
       factory: ProjectFactory
-  ): ZIO[Blocking, Nothing, (Model[Project], Model[Version], Model[Channel], Seq[Model[VersionTag]])] =
+  ): ZIO[Blocking, Nothing, (Model[Project], Model[Version], Seq[Model[VersionTag]])] =
     free[Task].orDie *> factory.createVersion(project, this)
 
   override def key: String = s"$projectId/$versionString"
@@ -84,7 +80,7 @@ case class PendingVersion(
     } yield res
   }
 
-  def asVersion(projectId: DbRef[Project], channelId: DbRef[Channel]): Version = Version(
+  def asVersion(projectId: DbRef[Project]): Version = Version(
     versionString = versionString,
     dependencyIds = dependencies.map {
       case Dependency(pluginId, Some(version)) => s"$pluginId:$version"
@@ -92,7 +88,6 @@ case class PendingVersion(
     },
     description = description,
     projectId = projectId,
-    channelId = channelId,
     fileSize = fileSize,
     hash = hash,
     authorId = Some(authorId),

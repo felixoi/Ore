@@ -27,7 +27,7 @@ import play.filters.gzip.{GzipFilter, GzipFilterConfig}
 
 import controllers._
 import controllers.apiv2.ApiV2Controller
-import controllers.project.{Channels, Pages, Projects, Versions}
+import controllers.project.{Pages, Projects, Versions}
 import controllers.sugar.Bakery
 import db.impl.DbUpdateTask
 import db.impl.access.{OrganizationBase, ProjectBase, UserBase}
@@ -295,7 +295,6 @@ class OreComponents(context: ApplicationLoader.Context)
   lazy val projects: Projects                                   = wire[Projects]
   lazy val pages: Pages                                         = wire[Pages]
   lazy val organizations: Organizations                         = wire[Organizations]
-  lazy val channels: Channels                                   = wire[Channels]
   lazy val reviews: Reviews                                     = wire[Reviews]
   lazy val applicationControllerProvider: Provider[Application] = () => applicationController
   lazy val apiV1ControllerProvider: Provider[ApiV1Controller]   = () => apiV1Controller
@@ -305,7 +304,6 @@ class OreComponents(context: ApplicationLoader.Context)
   lazy val projectsProvider: Provider[Projects]                 = () => projects
   lazy val pagesProvider: Provider[Pages]                       = () => pages
   lazy val organizationsProvider: Provider[Organizations]       = () => organizations
-  lazy val channelsProvider: Provider[Channels]                 = () => channels
   lazy val reviewsProvider: Provider[Reviews]                   = () => reviews
 
   def waitTilEvolutionsDone(action: UIO[Unit]): CancelableFuture[Nothing, Unit] = {

@@ -26,7 +26,7 @@ sealed abstract class Platform(
 ) extends IntEnumEntry {
 
   def createGhostTag(versionId: DbRef[Version], version: Option[String]): VersionTag =
-    VersionTag(versionId, name, version, tagColor)
+    VersionTag(versionId, name, version, tagColor, None)
 }
 object Platform extends IntEnum[Platform] {
 
@@ -35,7 +35,7 @@ object Platform extends IntEnum[Platform] {
   case object Sponge
       extends Platform(
         0,
-        "Sponge",
+        "spongeapi",
         SpongeCategory,
         0,
         "spongeapi",
@@ -46,7 +46,7 @@ object Platform extends IntEnum[Platform] {
   case object SpongeForge
       extends Platform(
         2,
-        "SpongeForge",
+        "spongeforge",
         SpongeCategory,
         2,
         "spongeforge",
@@ -57,7 +57,7 @@ object Platform extends IntEnum[Platform] {
   case object SpongeVanilla
       extends Platform(
         3,
-        "SpongeVanilla",
+        "spongevanilla",
         SpongeCategory,
         2,
         "spongevanilla",
@@ -68,7 +68,7 @@ object Platform extends IntEnum[Platform] {
   case object SpongeCommon
       extends Platform(
         4,
-        "SpongeCommon",
+        "sponge",
         SpongeCategory,
         1,
         "sponge",
@@ -77,10 +77,10 @@ object Platform extends IntEnum[Platform] {
       )
 
   case object Lantern
-      extends Platform(5, "Lantern", SpongeCategory, 2, "lantern", TagColor.Lantern, "https://www.lanternpowered.org/")
+      extends Platform(5, "lantern", SpongeCategory, 2, "lantern", TagColor.Lantern, "https://www.lanternpowered.org/")
 
   case object Forge
-      extends Platform(1, "Forge", ForgeCategory, 0, "forge", TagColor.Forge, "https://files.minecraftforge.net/")
+      extends Platform(1, "forge", ForgeCategory, 0, "forge", TagColor.Forge, "https://files.minecraftforge.net/")
 
   def getPlatforms(dependencyIds: Seq[String]): Seq[Platform] = {
     Platform.values

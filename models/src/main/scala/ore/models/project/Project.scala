@@ -16,7 +16,6 @@ import ore.member.{Joinable, MembershipDossier}
 import ore.models.admin.ProjectVisibilityChange
 import ore.models.api.ProjectApiKey
 import ore.models.project.Project.ProjectSettings
-import ore.models.statistic.ProjectView
 import ore.models.user.role.ProjectUserRole
 import ore.models.user.{User, UserOwned}
 import ore.permission.role.Role
@@ -42,7 +41,6 @@ import slick.lifted.{Rep, TableQuery}
   * @param ownerId                User ID of Project owner
   * @param name                   Name of plugin
   * @param slug                   URL slug
-  * @param recommendedVersionId   The ID of this project's recommended version
   * @param topicId                ID of forum topic
   * @param postId                 ID of forum topic post ID
   * @param isTopicDirty           Whether this project's forum topic needs to be updated
@@ -55,7 +53,6 @@ case class Project(
     ownerId: DbRef[User],
     name: String,
     slug: String,
-    recommendedVersionId: Option[DbRef[Version]] = None,
     category: Category = Category.Undefined,
     description: Option[String],
     topicId: Option[Int] = None,
@@ -255,16 +252,6 @@ object Project extends DefaultModelCompanion[Project, ProjectTable](TableQuery[P
       ).applyChild(self.id)
 
     /**
-      * Returns this Project's recommended version.
-      *
-      * @return Recommended version
-      */
-    def recommendedVersion[QOptRet, SRet[_]](
-        view: ModelView[QOptRet, SRet, VersionTable, Model[Version]]
-    ): Option[QOptRet] =
-      self.recommendedVersionId.map(versions(view).get)
-
-    /**
       * Sets the "starred" state of this Project for the specified User.
       *
       * @param user User to set starred state of
@@ -301,14 +288,6 @@ object Project extends DefaultModelCompanion[Project, ProjectTable](TableQuery[P
       require(userId != self.ownerId, "cannot flag own project")
       service.insert(Flag(self.id, user.id, reason, comment))
     }
-
-    /**
-      * Returns the Channels in this Project.
-      *
-      * @return Channels in project
-      */
-    def channels[V[_, _]: QueryView](view: V[ChannelTable, Model[Channel]]): V[ChannelTable, Model[Channel]] =
-      view.filterView(_.projectId === self.id.value)
 
     /**
       * Returns all versions in this project.

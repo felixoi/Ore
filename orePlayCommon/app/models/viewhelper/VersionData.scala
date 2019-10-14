@@ -7,7 +7,7 @@ import ore.data.Platform
 import ore.data.project.Dependency
 import ore.db.access.ModelView
 import ore.db.{Model, ModelService}
-import ore.models.project.{Channel, Project, Version}
+import ore.models.project.{Project, Version}
 import ore.models.user.User
 
 import cats.syntax.all._
@@ -16,12 +16,9 @@ import cats.{MonadError, Parallel}
 case class VersionData(
     p: ProjectData,
     v: Model[Version],
-    c: Model[Channel],
     approvedBy: Option[String], // Reviewer if present
     dependencies: Seq[(Dependency, Option[Model[Project]])]
 ) {
-
-  def isRecommended: Boolean = p.project.recommendedVersionId.contains(v.id.value)
 
   def fullSlug = s"""${p.fullSlug}/versions/${v.versionString}"""
 
@@ -45,10 +42,10 @@ object VersionData {
     import cats.instances.option._
     val depsF = version.dependencies.parTraverse(dep => dep.project.value.tupleLeft(dep))
 
-    (version.channel, version.reviewer(ModelView.now(User)).sequence.subflatMap(identity).map(_.name).value, depsF)
+    (version.reviewer(ModelView.now(User)).sequence.subflatMap(identity).map(_.name).value, depsF)
       .parMapN {
-        case (channel, approvedBy, deps) =>
-          VersionData(request.data, version, channel, approvedBy, deps)
+        case (approvedBy, deps) =>
+          VersionData(request.data, version, approvedBy, deps)
       }
   }
 }

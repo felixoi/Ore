@@ -82,7 +82,7 @@ class PluginFileData(data: Seq[DataValue]) {
     val buffer = new ArrayBuffer[VersionTag]
 
     if (containsMixins) {
-      val mixinTag = VersionTag(versionId, "Mixin", None, TagColor.Mixin)
+      val mixinTag = VersionTag(versionId, "Mixin", None, TagColor.Mixin, None)
       buffer += mixinTag
     }
 
