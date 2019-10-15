@@ -4,11 +4,16 @@ import java.time.OffsetDateTime
 
 import scala.collection.immutable
 
+import ore.data.Platform
 import ore.db._
 import ore.db.impl.ModelCompanionPartial
 import ore.db.impl.common.Named
 import ore.db.impl.schema.VersionTagTable
+import ore.models.project.VersionTag.{MixinTag, ReleaseTypeTag, StabilityTag}
 
+import cats.data.{NonEmptyList, Validated, ValidatedNel}
+import cats.instances.option._
+import cats.syntax.all._
 import enumeratum.values._
 import slick.lifted.TableQuery
 
@@ -28,6 +33,134 @@ object VersionTag extends ModelCompanionPartial[VersionTag, VersionTagTable](Tab
   ): Model[VersionTag] = Model(id, ObjOffsetDateTime(OffsetDateTime.MIN), model)
 
   implicit val query: ModelQuery[VersionTag] = ModelQuery.from(this)
+
+  def userTagsToReal(
+      name: String,
+      data: Seq[String],
+      versionId: DbRef[VersionTag]
+  ): ValidatedNel[String, (Seq[String], Seq[VersionTag])] = {
+    val platformsWithName = Platform.valuesToEntriesMap.map[String, Platform](t => t._2.name -> t._2)
+
+    //If the tag is a platform we want to treat it differently
+    platformsWithName.get(name) match {
+      case Some(platform) =>
+        if (data.nonEmpty) {
+          platform.createTag(versionId, None).map(t => t._1.toSeq -> Seq(t._2))
+        } else {
+          import cats.instances.vector._
+          data
+            .map(v => platform.createTag(versionId, Some(v)))
+            .toVector
+            .sequence
+            .map(v => v.flatMap(_._1) -> v.map(_._2))
+        }
+      case None =>
+        TagType.withValueOpt(name) match {
+          case Some(tagType) => tagType.createTagUnsanitized(data, versionId)
+          case None          => Validated.invalidNel(s"$name is not a valid tag")
+        }
+    }
+  }
+
+  trait TagType extends StringEnumEntry {
+    type Data
+    def name: String
+
+    def value: String = name
+
+    def tagColor(data: Data): TagColor
+
+    def stringyfyData(data: Data): Option[String]
+
+    def createTag(data: Data, versionId: DbRef[Version]): VersionTag =
+      VersionTag(versionId, name, stringyfyData(data), tagColor(data), None)
+
+    def parseData(data: Seq[String]): ValidatedNel[String, (Seq[String], Seq[Data])]
+
+    def createTagUnsanitized(
+        strData: Seq[String],
+        versionId: DbRef[Version]
+    ): Validated[NonEmptyList[String], (Seq[String], Seq[VersionTag])] =
+      parseData(strData).map(t => t._1 -> t._2.map(createTag(_, versionId)))
+  }
+  object TagType extends StringEnum[TagType] {
+    override def values: IndexedSeq[TagType] = findValues
+  }
+
+  object MixinTag extends TagType {
+    override type Data = Unit
+
+    override def name: String = "mixin"
+
+    override def tagColor(values: Unit): TagColor = TagColor.Mixin
+
+    override def stringyfyData(values: Unit): Option[String] = None
+
+    override def parseData(data: Seq[String]): ValidatedNel[String, (Seq[String], Seq[Unit])] =
+      Validated.validNel((if (data.nonEmpty) Seq("tags.mixin.warnings.noData") else Nil, Seq(())))
+  }
+
+  object StabilityTag extends TagType {
+    override type Data = StabilityValues
+
+    override def name: String = "stability"
+
+    override def tagColor(values: StabilityValues): TagColor = values.color
+
+    override def stringyfyData(values: StabilityValues): Option[String] = Some(values.value)
+
+    override def parseData(data: Seq[String]): ValidatedNel[String, (Seq[String], Seq[StabilityValues])] =
+      data.headOption
+        .toValidNel("tags.stability.errors.noData")
+        .andThen { s =>
+          StabilityValues
+            .withValueOpt(s)
+            .map(s => (if (data.lengthIs > 1) Seq("tags.stability.warnings.onlyOne") else Nil, Seq(s)))
+            .toValidNel("tags.stability.errors.invalidStability")
+        }
+
+    abstract class StabilityValues(val value: String, val color: TagColor) extends StringEnumEntry
+    object StabilityValues extends StringEnum[StabilityValues] {
+      override def values: IndexedSeq[StabilityValues] = findValues
+
+      case object Stable      extends StabilityValues("stable", ???)
+      case object Beta        extends StabilityValues("beta", ???)
+      case object Alpha       extends StabilityValues("alpha", ???)
+      case object Bleeding    extends StabilityValues("bleeding", ???)
+      case object Unsupported extends StabilityValues("unsupported", ???)
+      case object Broken      extends StabilityValues("broken", ???)
+    }
+  }
+
+  object ReleaseTypeTag extends TagType {
+    override type Data = ReleaseTypeValues
+
+    override def name: String = "release_type"
+
+    override def tagColor(values: ReleaseTypeValues): TagColor = values.color
+
+    override def stringyfyData(values: ReleaseTypeValues): Option[String] = Some(values.value)
+
+    override def parseData(data: Seq[String]): ValidatedNel[String, (Seq[String], Seq[ReleaseTypeValues])] =
+      data.headOption
+        .toValidNel("tags.release_type.errors.noData")
+        .andThen { s =>
+          ReleaseTypeValues
+            .withValueOpt(s)
+            .map(s => (if (data.lengthIs > 1) Seq("tags.release_type.warnings.onlyOne") else Nil, Seq(s)))
+            .toValidNel("tags.release_type.errors.invalidReleaseType")
+        }
+
+    abstract class ReleaseTypeValues(val value: String, val color: TagColor) extends StringEnumEntry
+    object ReleaseTypeValues extends StringEnum[ReleaseTypeValues] {
+      override def values: IndexedSeq[ReleaseTypeValues] = findValues
+
+      case object MajorUpdate extends ReleaseTypeValues("major_update", ???)
+      case object MinorUpdate extends ReleaseTypeValues("minor_update", ???)
+      case object Patches     extends ReleaseTypeValues("patches", ???)
+      case object Hotfix      extends ReleaseTypeValues("hotfix", ???)
+    }
+  }
 }
 
 sealed abstract class TagColor(val value: Int, val background: String, val foreground: String) extends IntEnumEntry

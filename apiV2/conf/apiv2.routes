@@ -591,7 +591,7 @@ GET     /projects/:pluginId/versions/:version/stats          @controllers.apiv2.
 #      $ref: '#/components/responses/ForbiddenError'
 ###
 +nocsrf
-PUT    /projects/:pluginId/versions                          @controllers.apiv2.ApiV2Controller.scanVersion(pluginId)
+PUT    /projects/:pluginId/versions/scan                     @controllers.apiv2.ApiV2Controller.scanVersion(pluginId)
 
 ###
 #  summary: Creates a new version

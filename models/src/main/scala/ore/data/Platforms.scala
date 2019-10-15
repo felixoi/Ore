@@ -3,11 +3,15 @@ package ore.data
 import scala.language.higherKinds
 
 import scala.collection.immutable
+import scala.util.matching.Regex
 
+import ore.data.Platform.NoVersionPolicy
 import ore.data.project.Dependency
-import ore.db.{DbRef, Model, ModelService}
+import ore.db.DbRef
 import ore.models.project.{TagColor, Version, VersionTag}
 
+import cats.data.{Validated, ValidatedNel}
+import cats.syntax.all._
 import enumeratum.values._
 
 /**
@@ -16,25 +20,54 @@ import enumeratum.values._
   * @author phase
   */
 sealed abstract class Platform(
-    val value: Int,
-    val name: String,
+    val value: String,
     val platformCategory: PlatformCategory,
     val priority: Int,
     val dependencyId: String,
     val tagColor: TagColor,
-    val url: String
-) extends IntEnumEntry {
+    val url: String,
+    val noVersionPolicy: Platform.NoVersionPolicy = Platform.NoVersionPolicy.NotAllowed
+) extends StringEnumEntry {
 
-  def createGhostTag(versionId: DbRef[Version], version: Option[String]): VersionTag =
-    VersionTag(versionId, name, version, tagColor, None)
+  def name: String = value
+
+  /**
+    * Creates a version tag for this platform
+    * @param versionId The version id to add in the tag
+    * @param optVersion A version for the tag
+    * @return A validated tuple of an optional warning, and a version tag
+    */
+  def createTag(
+      versionId: DbRef[Version],
+      optVersion: Option[String]
+  ): ValidatedNel[String, (Option[String], VersionTag)] = {
+
+    optVersion match {
+      case Some(version) =>
+        if (Platform.dependencyVersionRegex.matches(version))
+          Validated.validNel((None, VersionTag(versionId, name, Some(version), tagColor, None)))
+        else Validated.invalidNel("platform.invalidVersion")
+
+      case None =>
+        noVersionPolicy match {
+          case NoVersionPolicy.NotAllowed => Validated.invalidNel("platform.noVersionProvided.error")
+          case NoVersionPolicy.Warning =>
+            Validated.validNel(
+              (Some("platform.noVersionProvided.warning"), VersionTag(versionId, name, None, tagColor, None))
+            )
+          case NoVersionPolicy.Allowed => Validated.validNel((None, VersionTag(versionId, name, None, tagColor, None)))
+        }
+    }
+  }
 }
-object Platform extends IntEnum[Platform] {
+object Platform extends StringEnum[Platform] {
+
+  private val dependencyVersionRegex: Regex = """^[0-9a-zA-Z.,\[\]()-]+$""".r
 
   val values: immutable.IndexedSeq[Platform] = findValues
 
   case object Sponge
       extends Platform(
-        0,
         "spongeapi",
         SpongeCategory,
         0,
@@ -45,7 +78,6 @@ object Platform extends IntEnum[Platform] {
 
   case object SpongeForge
       extends Platform(
-        2,
         "spongeforge",
         SpongeCategory,
         2,
@@ -56,7 +88,6 @@ object Platform extends IntEnum[Platform] {
 
   case object SpongeVanilla
       extends Platform(
-        3,
         "spongevanilla",
         SpongeCategory,
         2,
@@ -67,7 +98,6 @@ object Platform extends IntEnum[Platform] {
 
   case object SpongeCommon
       extends Platform(
-        4,
         "sponge",
         SpongeCategory,
         1,
@@ -77,10 +107,10 @@ object Platform extends IntEnum[Platform] {
       )
 
   case object Lantern
-      extends Platform(5, "lantern", SpongeCategory, 2, "lantern", TagColor.Lantern, "https://www.lanternpowered.org/")
+      extends Platform("lantern", SpongeCategory, 2, "lantern", TagColor.Lantern, "https://www.lanternpowered.org/")
 
   case object Forge
-      extends Platform(1, "forge", ForgeCategory, 0, "forge", TagColor.Forge, "https://files.minecraftforge.net/")
+      extends Platform("forge", ForgeCategory, 0, "forge", TagColor.Forge, "https://files.minecraftforge.net/")
 
   def getPlatforms(dependencyIds: Seq[String]): Seq[Platform] = {
     Platform.values
@@ -90,14 +120,24 @@ object Platform extends IntEnum[Platform] {
       .toSeq
   }
 
-  def ghostTags(versionId: DbRef[Version], dependencies: Seq[Dependency]): Seq[VersionTag] =
+  def ghostTags(
+      versionId: DbRef[Version],
+      dependencies: Seq[Dependency]
+  ): ValidatedNel[String, (Vector[String], Vector[VersionTag])] = {
+    import cats.instances.vector._
     getPlatforms(dependencies.map(_.pluginId))
-      .map(p => p.createGhostTag(versionId, dependencies.find(_.pluginId == p.dependencyId).get.version))
+      .map(p => p.createTag(versionId, dependencies.find(_.pluginId == p.dependencyId).get.version))
+      .toVector
+      .sequence
+      .map(v => v.flatMap(_._1) -> v.map(_._2))
+  }
 
-  def createPlatformTags[F[_]](versionId: DbRef[Version], dependencies: Seq[Dependency])(
-      implicit service: ModelService[F]
-  ): F[Seq[Model[VersionTag]]] = service.bulkInsert(ghostTags(versionId, dependencies))
-
+  sealed trait NoVersionPolicy
+  object NoVersionPolicy {
+    case object NotAllowed extends NoVersionPolicy
+    case object Warning    extends NoVersionPolicy
+    case object Allowed    extends NoVersionPolicy
+  }
 }
 
 /**

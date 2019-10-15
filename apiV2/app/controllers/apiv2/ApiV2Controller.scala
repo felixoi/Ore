@@ -24,16 +24,15 @@ import controllers.{OreBaseController, OreControllerComponents}
 import db.impl.query.APIV2Queries
 import models.protocols.APIV2
 import models.querymodels.{APIV2ProjectStatsQuery, APIV2QueryVersion, APIV2QueryVersionTag, APIV2VersionStatsQuery}
-import ore.data.project.{Category, Dependency}
+import ore.data.project.Category
 import ore.db.access.ModelView
 import ore.db.impl.OrePostgresDriver.api._
-import ore.db.impl.schema.{ApiKeyTable, OrganizationTable, ProjectTable, UserTable, VersionTable}
+import ore.db.impl.schema._
 import ore.db.{DbRef, Model}
 import ore.models.api.ApiSession
-import ore.models.organization.Organization
 import ore.models.project.factory.{ProjectFactory, ProjectTemplate}
-import ore.models.project.io.PluginUpload
-import ore.models.project.{Page, ProjectSortingStrategy, ReviewState, Visibility}
+import ore.models.project.io.{PluginFileWithData, PluginUpload}
+import ore.models.project.{Page, Project, ProjectSortingStrategy, ReviewState, Visibility}
 import ore.models.user.{FakeUser, User}
 import ore.permission.scope.{GlobalScope, OrganizationScope, ProjectScope, Scope}
 import ore.permission.{NamedPermission, Permission}
@@ -506,7 +505,7 @@ class ApiV2Controller @Inject()(
 
         for {
           _ <- ZIO
-            .fromOption(factory.getUploadError(user))
+            .fromOption(factory.hasUserUploadError(user))
             .flip
             .mapError(e => BadRequest(UserError(messagesApi(e))))
           _ <- orgasUserCanUploadTo(user).filterOrFail(_.contains(settings.ownerName))(
@@ -580,8 +579,8 @@ class ApiV2Controller @Inject()(
     }
 
   def withUndefined[A: Decoder](cursor: ACursor): Decoder.AccumulatingResult[Option[A]] = {
-    import cats.instances.option._
     import cats.instances.either._
+    import cats.instances.option._
     val res = if (cursor.succeeded) Some(cursor.as[A]) else None
 
     res.sequence.toValidatedNel
@@ -716,9 +715,7 @@ class ApiV2Controller @Inject()(
   def editVersion(pluginId: String, name: String): Action[Json] =
     ApiAction(Permission.EditVersion, APIScope.ProjectScope(pluginId)).asyncF(parseCirce.json) { implicit request =>
       val root = request.body.hcursor
-      val res = (
-        withUndefined[Option[String]](root.downField("description"))
-      ).map(EditableVersion.apply)
+      val res  = withUndefined[Option[String]](root.downField("description")).map(EditableVersion.apply)
 
       res match {
         case Validated.Valid(a)   => ???
@@ -729,6 +726,17 @@ class ApiV2Controller @Inject()(
   def setVersionTags(pluginId: String, name: String): Action[Map[String, StringOrArrayString]] =
     ApiAction(Permission.EditVersion, APIScope.ProjectScope(pluginId))
       .asyncF(parseCirce.decodeJson[Map[String, StringOrArrayString]]) { implicit request =>
+        val newStrTags = request.body.map(t => t._1 -> t._2.asSeq)
+        val tagQuery = for {
+          p <- TableQuery[ProjectTable]
+          v <- TableQuery[VersionTable] if v.projectId === p.id
+          t <- TableQuery[VersionTagTable] if t.versionId === v.id
+          if p.pluginId === pluginId
+        } yield t
+
+        service.runDBIO(tagQuery.result).map { existingTags =>
+        }
+
         ???
       }
 
@@ -786,58 +794,57 @@ class ApiV2Controller @Inject()(
     effectBlocking(java.nio.file.Files.readAllLines(file).asScala.mkString("\n"))
   }
 
+  private def processVersionUploadToErrors(pluginId: String)(
+      implicit request: ApiRequest[MultipartFormData[Files.TemporaryFile]]
+  ): ZIO[Blocking, Result, (Model[User], Model[Project], PluginFileWithData)] = {
+    val fileF = ZIO.fromEither(
+      request.body.file("plugin-file").toRight(BadRequest(ApiError("No plugin file specified")))
+    )
+
+    for {
+      user    <- ZIO.fromOption(request.user).asError(BadRequest(ApiError("No user found for session")))
+      project <- projects.withPluginId(pluginId).get.asError(NotFound)
+      file    <- fileF
+      pluginFile <- factory
+        .collectErrorsForVersionUpload(PluginUpload(file.ref, file.filename), user, project)
+        .leftMap { s =>
+          implicit val lang: Lang = user.langOrDefault
+          BadRequest(UserError(messagesApi(s)))
+        }
+    } yield (user, project, pluginFile)
+  }
+
   def scanVersion(pluginId: String): Action[MultipartFormData[Files.TemporaryFile]] =
     ApiAction(Permission.CreateVersion, APIScope.ProjectScope(pluginId))(parse.multipartFormData).asyncF {
       implicit request =>
-        val fileF = ZIO.fromEither(
-          request.body.file("plugin-file").toRight(BadRequest(ApiError("No plugin file specified")))
-        )
-
-        def uploadErrors(user: Model[User]) = {
-          implicit val lang: Lang = user.langOrDefault
-          ZIO.fromEither(
-            factory
-              .getUploadError(user)
-              .map(e => BadRequest(UserError(messagesApi(e))))
-              .toLeft(())
-          )
-        }
-
         for {
-          user    <- ZIO.fromOption(request.user).asError(BadRequest(ApiError("No user found for session")))
-          _       <- uploadErrors(user)
-          project <- projects.withPluginId(pluginId).get.asError(NotFound)
-          file    <- fileF
-          t <- factory
-            .collectErrorsForVersionUpload(PluginUpload(file.ref, file.filename), user, project)
-            .leftMap { s =>
-              implicit val lang: Lang = user.langOrDefault
-              BadRequest(UserError(messagesApi(s)))
-            }
+          t <- processVersionUploadToErrors(pluginId)
+          (user, _, pluginFile) = t
+          t2 <- ZIO.fromEither(pluginFile.tagsForVersion(0L, Map.empty).toEither).mapError { es =>
+            implicit val lang: Lang = user.langOrDefault
+            BadRequest(UserErrors(es.map(messagesApi(_))))
+          }
         } yield {
-          val (versionString, pluginFile) = t
-          val tags                        = factory.tagsForVersion(pluginFile)(0L)
+          val (tagWarnings, tags) = t2
 
           val apiTags = tags.map(tag => APIV2QueryVersionTag(tag.name, tag.data, tag.color)).toList
 
           val apiVersion = APIV2QueryVersion(
             OffsetDateTime.now(),
-            versionString,
-            pluginFile.data.dependencies.map {
-              case Dependency(pluginId, Some(version)) => s"$pluginId:$version"
-              case Dependency(pluginId, None)          => pluginId
-            }.toList,
+            pluginFile.versionString,
+            pluginFile.dependencyIds.toList,
             Visibility.Public,
             0,
-            pluginFile.path.toFile.length,
+            pluginFile.fileSize,
             pluginFile.md5,
-            pluginFile.path.getFileName.toString,
+            pluginFile.fileName,
             Some(user.name),
             ReviewState.Unreviewed,
             apiTags
           )
 
-          Ok(ScannedVersion(apiVersion.asProtocol, ???))
+          val warnings = NonEmptyList.fromList((pluginFile.warnings ++ tagWarnings).toList)
+          Ok(ScannedVersion(apiVersion.asProtocol, warnings))
         }
     }
 
@@ -866,42 +873,22 @@ class ApiV2Controller @Inject()(
           .ensure("Description too long")(_.description.forall(_.length < Page.maxLength))
           .mapError(e => BadRequest(ApiError(e)))
 
-        val fileF = ZIO.fromEither(
-          request.body.file("plugin-file").toRight(BadRequest(ApiError("No plugin file specified")))
-        )
-
-        def uploadErrors(user: Model[User]) = {
-          implicit val lang: Lang = user.langOrDefault
-          ZIO.fromEither(
-            factory
-              .getUploadError(user)
-              .map(e => BadRequest(UserError(messagesApi(e))))
-              .toLeft(())
-          )
-        }
-
-        //TODO: Handle tags
-        ???
-
         for {
-          user    <- ZIO.fromOption(request.user).asError(BadRequest(ApiError("No user found for session")))
-          _       <- uploadErrors(user)
-          project <- projects.withPluginId(pluginId).get.asError(NotFound)
-          data    <- dataF
-          file    <- fileF
-          pendingVersion <- factory
-            .collectErrorsForVersionUpload(PluginUpload(file.ref, file.filename), user, project)
-            .leftMap { s =>
+          t <- processVersionUploadToErrors(pluginId)
+          (user, project, pluginFile) = t
+          data <- dataF
+          t <- factory
+            .createVersion(
+              project,
+              pluginFile,
+              data.description,
+              data.createForumPost.getOrElse(project.settings.forumSync),
+              data.tags.fold(Map.empty[String, Seq[String]])(_.view.mapValues(_.asSeq).toMap)
+            )
+            .mapError { es =>
               implicit val lang: Lang = user.langOrDefault
-              BadRequest(UserError(messagesApi(s)))
+              BadRequest(UserErrors(es.map(messagesApi(_))))
             }
-            .map { v =>
-              v.copy(
-                createForumPost = data.createForumPost.getOrElse(project.settings.forumSync),
-                description = data.description
-              )
-            }
-          t <- pendingVersion.complete(project, factory)
         } yield {
           val (_, version, tags) = t
 
@@ -1008,8 +995,6 @@ class ApiV2Controller @Inject()(
 }
 object ApiV2Controller {
 
-  import APIV2.config
-
   sealed abstract class APIScope(val tpe: APIScopeType)
   object APIScope {
     case object GlobalScope                                extends APIScope(APIScopeType.Global)
@@ -1046,7 +1031,9 @@ object ApiV2Controller {
     implicit val semigroup: Semigroup[ApiErrors] = (x: ApiErrors, y: ApiErrors) =>
       ApiErrors(x.errors.concatNel(y.errors))
   }
+
   @ConfiguredJsonCodec case class UserError(userError: String)
+  @ConfiguredJsonCodec case class UserErrors(userErrors: NonEmptyList[String])
 
   @ConfiguredJsonCodec case class KeyToCreate(name: String, permissions: Seq[String])
   @ConfiguredJsonCodec case class CreatedApiKey(key: String, perms: Seq[NamedPermission])
@@ -1058,14 +1045,14 @@ object ApiV2Controller {
   )
 
   sealed trait StringOrArrayString {
-    def first: String
+    def asSeq: Seq[String]
   }
   object StringOrArrayString {
     case class AsString(s: String) extends StringOrArrayString {
-      def first: String = s
+      def asSeq: Seq[String] = Seq(s)
     }
     case class AsArray(ss: Seq[String]) extends StringOrArrayString {
-      override def first: String = ss.head
+      override def asSeq: Seq[String] = ss
     }
 
     implicit val codec: CirceCodec[StringOrArrayString] = CirceCodec.from(
@@ -1150,6 +1137,6 @@ object ApiV2Controller {
 
   @ConfiguredJsonCodec case class ScannedVersion(
       version: APIV2.Version,
-      warnings: Option[Seq[String]]
+      warnings: Option[NonEmptyList[String]]
   )
 }
