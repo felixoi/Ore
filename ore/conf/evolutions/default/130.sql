@@ -4,7 +4,7 @@ CREATE OR REPLACE FUNCTION update_project_versions_downloads() RETURNS VOID
     LANGUAGE plpgsql AS
 $$
 DECLARE
-    process_limit CONSTANT TIMESTAMPTZ := date_trunc('day', now()) - INTERVAL '1 day';;
+    process_limit CONSTANT TIMESTAMPTZ := date_trunc('day', now());;
 BEGIN
 
     INSERT INTO project_versions_downloads AS pvd (day, project_id, version_id, downloads)
@@ -33,7 +33,7 @@ CREATE OR REPLACE FUNCTION update_project_views() RETURNS VOID
     LANGUAGE plpgsql AS
 $$
 DECLARE
-    process_limit CONSTANT TIMESTAMPTZ := date_trunc('day', now()) - INTERVAL '1 day';;
+    process_limit CONSTANT TIMESTAMPTZ := date_trunc('day', now());;
 BEGIN
 
     INSERT INTO project_views AS pv (day, project_id, views)
